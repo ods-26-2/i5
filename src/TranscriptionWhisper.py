@@ -9,6 +9,7 @@ import unicodedata
 import spacy
 import json
 import datetime
+import os
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -145,15 +146,13 @@ class TranscritorWhisper:
 if __name__ == "__main__":
     transcritor = TranscritorWhisper()
 
-    # Substitui pelo nome do teu ficheiro de teste
-    caminho_audio = "data/audio6.ogg" 
+    caminho_audio = "../data/audio6.ogg" 
     
     try:
         audio_real, sr = librosa.load(caminho_audio, sr=16000)
         
         print(f"A processar o ficheiro: {caminho_audio}...\n")
         
-        # Passando um timestamp e origem simulados para o teste local
         json_saida = transcritor.transcrever_audio(
             audio_array=audio_real, 
             origem="mic_balcao_1",
@@ -162,6 +161,20 @@ if __name__ == "__main__":
         
         print("--- Saída do Componente I5 (Contrato JSON) ---")
         print(json_saida)
+
+        pasta_saida = "../jsons_gerados"
+        os.makedirs(pasta_saida, exist_ok=True) 
+        
+        # Gera um nome de arquivo único usando a data e hora atual do sistema
+        timestamp_arquivo = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        nome_arquivo = f"evento_i5_{timestamp_arquivo}.json"
+        caminho_arquivo = os.path.join(pasta_saida, nome_arquivo)
+        
+        # Salva o arquivo garantindo a codificação correta para acentos
+        with open(caminho_arquivo, "w", encoding="utf-8") as f:
+            f.write(json_saida)
+            
+        print(f"\nJSON salvo com sucesso em: {caminho_arquivo}")
         
     except FileNotFoundError:
         print(f"Erro: O ficheiro '{caminho_audio}' não foi encontrado.")
