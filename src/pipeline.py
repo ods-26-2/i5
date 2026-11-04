@@ -12,6 +12,7 @@ Orquestra o fluxo contínuo de áudio:
 """
 
 import argparse
+import json
 import os
 import queue
 import sys
@@ -36,6 +37,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.audio_preprocessor import AudioPreprocessor
+from src.kafka_publisher import (
+    DEFAULT_TOPIC,
+    TranscriptKafkaPublisher,
+    construir_envelope_transcricao,
+)
 from src.vad_segmenter import AudioBatch, VADSegmenter
 
 try:
@@ -58,13 +64,17 @@ class RealtimeSpeechPipeline:
         silence_threshold_ms: int = 700,
         apply_noise_filter: bool = True,
         on_transcription: Optional[Callable[[dict], None]] = None,
+        origem: str = "mic_balcao_1",
+        kafka_publisher: Optional[TranscriptKafkaPublisher] = None,
     ):
         """
-        Inicializa o pipeline com os componentes de VAD e Transcrição.
+        Inicializa o pipeline com os componentes de VAD, Transcrição e Publicação Kafka (B2).
         """
         self.sample_rate = sample_rate
         self.apply_noise_filter = apply_noise_filter
         self.on_transcription = on_transcription
+        self.origem = origem
+        self.kafka_publisher = kafka_publisher
 
         if device is None:
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -122,17 +132,41 @@ class RealtimeSpeechPipeline:
             resultado = self.transcritor.transcrever_audio(
                 batch.audio,
                 sampling_rate=batch.sample_rate,
+                origem=self.origem,
             )
             inference_time_ms = (time.perf_counter() - inference_start) * 1000
 
-            # Monta o contrato de saída alinhado ao CONTEXT.md
+            if isinstance(resultado, str):
+                envelope = json.loads(resultado)
+                pl = envelope.get("payload", {})
+                texto_extraido = pl.get("texto_transcrito", "")
+                confianca_extraida = pl.get("confianca_geral", pl.get("confidence", 0.0))
+                uncertain_flag = pl.get("uncertain", bool(confianca_extraida < 0.5))
+            else:
+                texto_extraido = resultado.get("texto", "")
+                confianca_extraida = resultado.get("confianca", 0.0)
+                envelope = construir_envelope_transcricao(
+                    texto_transcrito=texto_extraido,
+                    confianca=confianca_extraida,
+                    origem=self.origem,
+                    schema=self.kafka_publisher.topic if self.kafka_publisher else DEFAULT_TOPIC,
+                )
+                uncertain_flag = envelope["payload"]["uncertain"]
+
+            # Publica no barramento Kafka (tópico ods.i5.transcript) se o produtor estiver ativo
+            if self.kafka_publisher is not None:
+                self.kafka_publisher.publish_envelope(envelope, flush=False)
+
+            # Monta o contrato de saída alinhado ao CONTEXT.md + Envelope B2
             payload = {
                 "batch_index": batch.batch_index,
                 "start_time": round(batch.start_time, 3),
                 "end_time": round(batch.end_time, 3),
                 "duration": round(batch.duration, 3),
-                "texto": resultado["texto"],
-                "confianca": resultado["confianca"],
+                "texto": texto_extraido,
+                "confianca": confianca_extraida,
+                "uncertain": uncertain_flag,
+                "envelope": envelope,
                 "inference_time_ms": round(inference_time_ms, 2),
                 "timestamp_criacao": time.time(),
                 "metadata": batch.metadata,
@@ -145,7 +179,7 @@ class RealtimeSpeechPipeline:
             else:
                 print(
                     f"[{payload['start_time']:6.2f}s -> {payload['end_time']:6.2f}s] "
-                    f"(conf: {payload['confianca']:.2f} | {payload['inference_time_ms']:.0f}ms) "
+                    f"(conf: {payload['confianca']:.2f} | uncertain: {payload['uncertain']} | {payload['inference_time_ms']:.0f}ms) "
                     f"=> \"{payload['texto']}\""
                 )
 
@@ -166,12 +200,15 @@ class RealtimeSpeechPipeline:
 
     def stop(self) -> None:
         """
-        Encerra a thread consumidora e aguarda a finalização dos batches pendentes.
+        Encerra a thread consumidora, aguarda a finalização dos batches pendentes
+        e faz flush do produtor Kafka (B2).
         """
         self._running = False
         self.batch_queue.put(None)  # Envia sinalizador de término
         if self._consumer_thread and self._consumer_thread.is_alive():
             self._consumer_thread.join()
+        if self.kafka_publisher is not None:
+            self.kafka_publisher.flush()
 
     def process_chunk(self, audio_chunk: np.ndarray) -> None:
         """
@@ -283,6 +320,29 @@ def main():
         action="store_true",
         help="Desativa filtro de ruído",
     )
+    parser.add_argument(
+        "--origem",
+        type=str,
+        default="mic_balcao_1",
+        help="Identificador da origem/microfone no payload (default: mic_balcao_1)",
+    )
+    parser.add_argument(
+        "--publish-kafka",
+        action="store_true",
+        help="Ativa publicação dos eventos de transcrição no tópico Kafka ods.i5.transcript",
+    )
+    parser.add_argument(
+        "--kafka-broker",
+        type=str,
+        default=None,
+        help="Endereço do broker Kafka (default: 34.66.235.91:9093 ou KAFKA_BOOTSTRAP_SERVERS)",
+    )
+    parser.add_argument(
+        "--kafka-topic",
+        type=str,
+        default=None,
+        help="Tópico Kafka de destino (default: ods.i5.transcript ou KAFKA_TOPIC)",
+    )
 
     args = parser.parse_args()
 
@@ -290,6 +350,14 @@ def main():
     if not audio_file.exists():
         print(f"Erro: Arquivo '{audio_file}' não encontrado.")
         sys.exit(1)
+
+    kafka_pub = None
+    if args.publish_kafka:
+        kafka_pub = TranscriptKafkaPublisher(
+            bootstrap_servers=args.kafka_broker,
+            topic=args.kafka_topic,
+        )
+        print(f"[I5 - Kafka] Publicando em {kafka_pub.bootstrap_servers} -> Tópico: {kafka_pub.topic}")
 
     print(f"\n=======================================================")
     print(f"   Iniciando Pipeline I5: VAD Contínuo + Whisper")
@@ -302,6 +370,8 @@ def main():
         speech_threshold=args.threshold,
         silence_threshold_ms=args.silence_threshold_ms,
         apply_noise_filter=not args.no_noise_filter,
+        origem=args.origem,
+        kafka_publisher=kafka_pub,
     )
 
     chunk_size = int(16000 * (args.chunk_ms / 1000.0))

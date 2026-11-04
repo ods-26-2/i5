@@ -1,8 +1,6 @@
 .venv
-<<<<<<< HEAD
+venv
 __pycache__/
 *.pyc
+.pytest_cache/
 output_batches/
-=======
-venv
->>>>>>> origin/main

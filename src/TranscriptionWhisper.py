@@ -10,6 +10,20 @@ import spacy
 import json
 import datetime
 import os
+import uuid
+
+try:
+    from src.kafka_publisher import (
+        DEFAULT_TOPIC,
+        TranscriptKafkaPublisher,
+        construir_envelope_transcricao,
+    )
+except ImportError:
+    from kafka_publisher import (
+        DEFAULT_TOPIC,
+        TranscriptKafkaPublisher,
+        construir_envelope_transcricao,
+    )
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -36,9 +50,18 @@ class TranscritorWhisper:
             print("Aviso: Modelo do spaCy não encontrado. Execute: python -m spacy download pt_core_news_sm")
             self.nlp = None
 
-    def transcrever_audio(self, audio_array: np.ndarray, sampling_rate: int = 16000, origem: str = "P5 pendente", timestamp_inicio: str = None) -> str:
+    def transcrever_audio(
+        self,
+        audio_array: np.ndarray,
+        sampling_rate: int = 16000,
+        origem: str = "P5 pendente",
+        timestamp_inicio: str = None,
+        ruido_excessivo: bool = False,
+        kafka_publisher: TranscriptKafkaPublisher = None,
+    ) -> str:
         """
-        Recebe o batch de áudio e metadados, retornando o payload JSON estruturado.
+        Recebe o batch de áudio e metadados, retornando o envelope JSON padrão B1/B2
+        (e publicando no tópico Kafka `ods.i5.transcript` caso `kafka_publisher` seja fornecido).
         """
 
         if not timestamp_inicio:
@@ -74,26 +97,20 @@ class TranscritorWhisper:
         transcricao_limpa = self._preprocessar_texto(transcricao)
         # Cálculo da confiança 
         confianca = self._calcular_confianca(outputs.scores)
-        duvida_explicita = bool(confianca < 0.5)
 
-        payload = {
-            "origem": origem,
-            "timestamp_inicio": inicio_dt.isoformat(),
-            "timestamp_fim": fim_dt.isoformat(),
-            "texto_transcrito": transcricao,
-            "texto_preprocessado": transcricao_limpa,
-            "confianca_geral": confianca,
-            "duvida_explicita": duvida_explicita
-        }
+        envelope = construir_envelope_transcricao(
+            texto_transcrito=transcricao,
+            confianca=confianca,
+            origem=origem,
+            texto_preprocessado=transcricao_limpa,
+            timestamp_inicio=inicio_dt.isoformat(),
+            timestamp_fim=fim_dt.isoformat(),
+            ruido_excessivo=ruido_excessivo,
+            schema=kafka_publisher.topic if kafka_publisher else os.getenv("KAFKA_TOPIC", DEFAULT_TOPIC),
+        )
 
-        envelope = {
-            "message_type": "event",
-            "schema": "ods.varejo.transcricao",
-            "schema_version": "1.0",
-            "producer": "I5",
-            "published_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "payload": payload
-        }
+        if kafka_publisher is not None:
+            kafka_publisher.publish_envelope(envelope, flush=True)
 
         return json.dumps(envelope, ensure_ascii=False, indent=2)
 
@@ -144,38 +161,59 @@ class TranscritorWhisper:
         return texto
 
 if __name__ == "__main__":
-    transcritor = TranscritorWhisper()
+    import argparse
 
-    caminho_audio = "../data/audio6.ogg" 
-    
+    parser = argparse.ArgumentParser(description="Transcrição Whisper I5 + Publicação Kafka (B2)")
+    parser.add_argument("--audio", default="../data/audio6.ogg", help="Caminho do arquivo de áudio")
+    parser.add_argument("--origem", default="mic_balcao_1", help="Identificador da origem/microfone")
+    parser.add_argument("--broker", default=None, help="Endereço do broker Kafka (default: 34.66.235.91:9093)")
+    parser.add_argument("--topic", default=None, help="Tópico Kafka (default: ods.i5.transcript)")
+    parser.add_argument("--no-kafka", action="store_true", help="Desabilita publicação no broker Kafka")
+    args = parser.parse_args()
+
+    transcritor = TranscritorWhisper()
+    publisher = None
+    if not args.no_kafka:
+        try:
+            publisher = TranscriptKafkaPublisher(
+                bootstrap_servers=args.broker,
+                topic=args.topic,
+            )
+            print(f"[I5 - Kafka] Produtor inicializado -> Broker: {publisher.bootstrap_servers} | Tópico: {publisher.topic}")
+        except Exception as exc:
+            print(f"[I5 - Kafka] Aviso: não foi possível inicializar o produtor Kafka ({exc}). Salvando apenas em disco.")
+
+    caminho_audio = args.audio
+
     try:
         audio_real, sr = librosa.load(caminho_audio, sr=16000)
-        
+
         print(f"A processar o ficheiro: {caminho_audio}...\n")
-        
+
         json_saida = transcritor.transcrever_audio(
-            audio_array=audio_real, 
-            origem="mic_balcao_1",
-            timestamp_inicio="2026-09-16T14:05:00.000Z"
+            audio_array=audio_real,
+            origem=args.origem,
+            timestamp_inicio="2026-09-16T14:05:00.000Z",
+            kafka_publisher=publisher,
         )
-        
-        print("--- Saída do Componente I5 (Contrato JSON) ---")
+
+        print("--- Saída do Componente I5 (Contrato JSON B2) ---")
         print(json_saida)
 
         pasta_saida = "../jsons_gerados"
-        os.makedirs(pasta_saida, exist_ok=True) 
-        
+        os.makedirs(pasta_saida, exist_ok=True)
+
         # Gera um nome de arquivo único usando a data e hora atual do sistema
         timestamp_arquivo = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         nome_arquivo = f"evento_i5_{timestamp_arquivo}.json"
         caminho_arquivo = os.path.join(pasta_saida, nome_arquivo)
-        
+
         # Salva o arquivo garantindo a codificação correta para acentos
         with open(caminho_arquivo, "w", encoding="utf-8") as f:
             f.write(json_saida)
-            
+
         print(f"\nJSON salvo com sucesso em: {caminho_arquivo}")
-        
+
     except FileNotFoundError:
         print(f"Erro: O ficheiro '{caminho_audio}' não foi encontrado.")
         print("Grava um ficheiro rápido e coloca-o na mesma pasta do script.")

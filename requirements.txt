@@ -8,3 +8,4 @@ transformers
 numpy
 librosa
 spacy
+confluent-kafka>=2.4.0
