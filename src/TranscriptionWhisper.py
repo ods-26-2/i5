@@ -81,6 +81,14 @@ class TranscritorWhisper:
         self.options = dict(options or {})
         if torch_dtype and "torch_dtype" not in self.options:
             self.options["torch_dtype"] = torch_dtype
+        self.options.setdefault("device", self.device)
+        # Habilita por padrão o fallback local do Whisper dentro do p2_runtime
+        # quando rodando localmente sem um spy/mock injetado.
+        if p2_module is None:
+            self.options.setdefault(
+                "use_local_whisper",
+                os.getenv("P2_USE_LOCAL_WHISPER", "1") != "0",
+            )
 
         # 1. Carrega o engine na GPU via interface fechada P2: load(engine_ref, options)
         self.handle: Optional[str] = self.p2.load(self.engine_ref, self.options)

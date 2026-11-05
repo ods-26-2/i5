@@ -193,17 +193,6 @@ class RealtimeSpeechPipeline:
         else:
             self.segmenter = None
 
-        # Filtro leve de Keyword Spotting (Wake Word) na CPU antes do ASR Whisper
-        if keyword_spotter is not None:
-            self.keyword_spotter = keyword_spotter
-            self.keyword_spotter.enabled = self.enable_wake_word
-        else:
-            self.keyword_spotter = KeywordSpotter(
-                keywords=wake_words or list(DEFAULT_WAKE_WORDS),
-                sample_rate=self.sample_rate,
-                enabled=self.enable_wake_word,
-            )
-
         # Transcritor ASR (Whisper na GPU via P2)
         if transcritor is not None:
             self.transcritor = transcritor
@@ -216,6 +205,45 @@ class RealtimeSpeechPipeline:
                 torch_dtype=whisper_cfg.get("torch_dtype", "float16"),
             )
         print(f"[I5 - Pipeline] Whisper iniciado no device: {getattr(self.transcritor, 'device', self.device)} (modelo: {whisper_cfg.get('model_name')})")
+
+        # Filtro leve de Keyword Spotting (Wake Word) antes do ASR completo:
+        # Quando estamos usando o TranscritorWhisper real (sem custom_detector de teste),
+        # podemos verificar apenas a janela inicial de 1.8s transcrevendo somente as primeiras
+        # palavras para confirmar se o áudio começa com "Lexie".
+        if keyword_spotter is not None:
+            self.keyword_spotter = keyword_spotter
+            self.keyword_spotter.enabled = self.enable_wake_word
+        else:
+            prefix_detector = None
+            if transcritor is None and hasattr(self.transcritor, "transcrever_audio"):
+                def _verificar_prefixo_curto(prefix_samples, sr, keywords):
+                    # Se o sinal já tiver similaridade acústica exata com o template sintético (>= 0.92), aceita direto
+                    samples_1_5s = prefix_samples[: int(1.5 * sr)]
+                    env = self.keyword_spotter._compute_normalized_envelope(samples_1_5s, num_bins=25)
+                    for raw_kw, norm_kw in zip(self.keyword_spotter.keywords, self.keyword_spotter.normalized_keywords):
+                        tpl = self.keyword_spotter._templates.get(norm_kw)
+                        if tpl and self.keyword_spotter._cosine_similarity(env, tpl) >= 0.92:
+                            return True, raw_kw, 0.95
+
+                    # Para áudio humano real: transcreve a janela inicial (~3.0s) sem cortar a sílaba
+                    # de "Lexie" / "Lexi" ao meio, verificando se o termo de ativação foi dito no início.
+                    arr = np.asarray(prefix_samples, dtype=np.float32) if np is not None else prefix_samples
+                    res_json = self.transcritor.transcrever_audio(arr, sampling_rate=sr, origem=self.origem)
+                    env_dict = json.loads(res_json) if isinstance(res_json, str) else res_json
+                    texto_prefixo = env_dict.get("payload", {}).get("texto_transcrito", "")
+                    matched, kw = self.keyword_spotter.detect_in_text(texto_prefixo)
+                    print(f"[I5 - KWS] Início do áudio ouvido: \"{texto_prefixo}\" -> Wake word ('lexie'/'lexi') detectada: {matched}")
+                    return matched, kw, (0.95 if matched else 0.10)
+
+                prefix_detector = _verificar_prefixo_curto
+
+            self.keyword_spotter = KeywordSpotter(
+                keywords=wake_words or list(DEFAULT_WAKE_WORDS),
+                sample_rate=self.sample_rate,
+                enabled=self.enable_wake_word,
+                prefix_window_sec=3.0 if prefix_detector is not None else 1.5,
+                custom_detector=prefix_detector,
+            )
 
         # Fila desacoplada em RAM entre VAD+KWS (CPU) e Whisper (GPU)
         self.batch_queue: queue.Queue = queue.Queue()
@@ -354,10 +382,20 @@ class RealtimeSpeechPipeline:
 
         if kws_result.detected:
             self.batches_dispatched_to_gpu += 1
+            if self.enable_wake_word:
+                print(
+                    f"[I5 - KWS (CPU)] Lote #{batch.batch_index} ({batch.start_time:.2f}s -> {batch.end_time:.2f}s) "
+                    f"APROVADO (wake word '{kws_result.matched_keyword}' detectada, conf={kws_result.confidence:.2f}) -> enviando à GPU"
+                )
             self.batch_queue.put(batch)
             return True
 
         self.batches_filtered_by_kws += 1
+        print(
+            f"[I5 - KWS (CPU)] Lote #{batch.batch_index} ({batch.start_time:.2f}s -> {batch.end_time:.2f}s) "
+            f"DESCARTADO (wake word {self.keyword_spotter.keywords} não detectada no início: {kws_result.reason}) "
+            f"— chamada ao Whisper na GPU economizada!"
+        )
         self.rejected_batches.append(
             {
                 "batch_index": batch.batch_index,
@@ -713,10 +751,14 @@ def main():
     resultados = pipeline.process_stream(stream)
     elapsed = time.perf_counter() - start_total
 
+    total_vad = pipeline.batches_dispatched_to_gpu + pipeline.batches_filtered_by_kws
     print(f"\n=======================================================")
     print(f"   Processamento Concluído!")
     print(f"   Tempo total: {elapsed:.2f}s")
-    print(f"   Total de frases/batches transcritos: {len(resultados)}")
+    print(f"   Lotes detectados pelo VAD (CPU): {total_vad}")
+    if args.wake_word:
+        print(f"   Lotes bloqueados pelo KWS/Wake Word (CPU): {pipeline.batches_filtered_by_kws}")
+    print(f"   Total de frases/batches transcritos na GPU: {len(resultados)}")
     print(f"=======================================================\n")
 
 

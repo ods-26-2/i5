@@ -45,6 +45,118 @@ RUNTIME_ERROR = "RUNTIME_ERROR"
 # Orçamento padrão de memória na Jetson Orin Nano (em MB) reservado para engines de inferência
 DEFAULT_JETSON_MEMORY_BUDGET_MB = 2048.0
 
+def _resolve_hf_model_id(engine_ref: str, opts: Dict[str, Any]) -> str:
+    """
+    Mapeia um `engine_ref` do contrato P2 (ex: 'whisper-small-trt-fp16:1.0.0')
+    para um repositório HuggingFace local/cacheado (ex: 'openai/whisper-small')
+    enquanto o runtime nativo TensorRT do P2 não está disponível.
+    """
+    if opts.get("hf_model_id"):
+        return str(opts["hf_model_id"])
+    ref_lower = engine_ref.split(":")[0].lower()
+    if "/" in engine_ref and ":" not in engine_ref:
+        return engine_ref
+    if "whisper-tiny" in ref_lower:
+        return "openai/whisper-tiny"
+    if "whisper-base" in ref_lower:
+        return "openai/whisper-base"
+    if "whisper-medium" in ref_lower:
+        return "openai/whisper-medium"
+    if "whisper-large" in ref_lower:
+        return "openai/whisper-large-v3"
+    return "openai/whisper-small"
+
+
+def _create_local_whisper_backend(engine_ref: str, opts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Inicializa o modelo Whisper local (via PyTorch/Transformers) encapsulado
+    dentro do adaptador P2 para permitir execução real na máquina de desenvolvimento
+    enquanto a biblioteca TensorRT da Jetson (P2) ainda não foi entregue.
+    """
+    try:
+        import torch
+        import torch.nn.functional as F
+        from transformers import WhisperForConditionalGeneration, WhisperProcessor
+    except ImportError:
+        return None
+
+    hf_model_id = _resolve_hf_model_id(engine_ref, opts)
+    requested_device = str(opts.get("device", "cuda"))
+    if requested_device.startswith("cuda") and not torch.cuda.is_available():
+        device = "cpu"
+    else:
+        device = requested_device
+
+    dtype = torch.float16 if device.startswith("cuda") else torch.float32
+
+    print(
+        f"[P2 Local Fallback] Carregando '{hf_model_id}' localmente em {device.upper()} ({dtype}) "
+        f"sob o contrato P2 (engine_ref='{engine_ref}')..."
+    )
+    processor = WhisperProcessor.from_pretrained(hf_model_id)
+    model = WhisperForConditionalGeneration.from_pretrained(
+        hf_model_id,
+        torch_dtype=dtype,
+    ).to(device)
+    model.eval()
+
+    def _run_local_infer(audio: Any) -> Dict[str, Any]:
+        if np is not None and not isinstance(audio, np.ndarray):
+            audio_arr = np.asarray(audio, dtype=np.float32).reshape(-1)
+        else:
+            audio_arr = audio.reshape(-1) if hasattr(audio, "reshape") else audio
+
+        input_features = processor(
+            audio_arr,
+            sampling_rate=16000,
+            return_tensors="pt",
+        ).input_features.to(device, dtype=dtype)
+
+        with torch.no_grad():
+            outputs = model.generate(
+                input_features,
+                language="portuguese",
+                task="transcribe",
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
+
+        transcricao = processor.batch_decode(
+            outputs.sequences, skip_special_tokens=True
+        )[0].strip()
+
+        probabilidades_tokens = []
+        if outputs.scores:
+            for step_logits in outputs.scores:
+                logits = step_logits[0]
+                probs = F.softmax(logits, dim=-1)
+                prob_maxima = float(torch.max(probs).item())
+                probabilidades_tokens.append(prob_maxima)
+
+        confianca = (
+            round(sum(probabilidades_tokens) / len(probabilidades_tokens), 4)
+            if probabilidades_tokens
+            else 0.0
+        )
+        return {
+            "text": transcricao,
+            "confidence": confianca,
+            "token_probs": probabilidades_tokens,
+        }
+
+    def _cleanup_local() -> None:
+        nonlocal model, processor
+        del model
+        del processor
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    return {
+        "callable": _run_local_infer,
+        "cleanup": _cleanup_local,
+        "device": device,
+        "hf_model_id": hf_model_id,
+    }
 # Registro em memória dos engines carregados pelo processo atual
 _ACTIVE_HANDLES: Dict[str, Dict[str, Any]] = {}
 _ALLOCATED_MEMORY_MB: float = 0.0
@@ -105,6 +217,14 @@ def load(engine_ref: str, options: Optional[Dict[str, Any]] = None) -> str:
     output_shape = list(opts.get("output_shape", [1, 448]))
     engine_version = _resolve_engine_version(ref_clean)
 
+    backend_callable = opts.get("backend_callable")
+    cleanup_callable = None
+    if backend_callable is None and opts.get("use_local_whisper", False):
+        local_backend = _create_local_whisper_backend(ref_clean, opts)
+        if local_backend is not None:
+            backend_callable = local_backend["callable"]
+            cleanup_callable = local_backend["cleanup"]
+
     handle = f"p2_engine_{uuid.uuid4().hex[:12]}"
     _ACTIVE_HANDLES[handle] = {
         "handle": handle,
@@ -115,7 +235,8 @@ def load(engine_ref: str, options: Optional[Dict[str, Any]] = None) -> str:
         "precision": precision,
         "max_batch": max_batch,
         "gpu_memory_mb": required_mb,
-        "backend_callable": opts.get("backend_callable"),
+        "backend_callable": backend_callable,
+        "cleanup_callable": cleanup_callable,
         "loaded_at": time.time(),
     }
     _ALLOCATED_MEMORY_MB += required_mb
@@ -226,6 +347,12 @@ def release(handle: str) -> None:
     global _ALLOCATED_MEMORY_MB
     entry = _ACTIVE_HANDLES.pop(handle, None)
     if entry is not None:
+        cleanup_fn = entry.get("cleanup_callable")
+        if callable(cleanup_fn):
+            try:
+                cleanup_fn()
+            except Exception:
+                pass
         _ALLOCATED_MEMORY_MB = max(0.0, _ALLOCATED_MEMORY_MB - float(entry.get("gpu_memory_mb", 0.0)))
         entry.clear()
 

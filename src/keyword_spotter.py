@@ -15,6 +15,7 @@ Critérios de Aceitação:
 
 from __future__ import annotations
 
+import difflib
 import math
 import re
 import time
@@ -30,8 +31,19 @@ except ImportError:
 
 DEFAULT_WAKE_WORDS: Tuple[str, ...] = ("lexie",)
 
-# Variações fonéticas/ortográficas equivalentes para "Lexie"
-LEXIE_ALIASES: Tuple[str, ...] = ("lexie", "lexi", "lxi", "lexy")
+# Variações fonéticas/ortográficas equivalentes para "Lexie" (comuns em ASR em português)
+LEXIE_ALIASES: Tuple[str, ...] = (
+    "lexie",
+    "lexi",
+    "lxi",
+    "lexy",
+    "leksi",
+    "lex",
+    "leci",
+    "lecce",
+    "alexia",
+    "alexa",
+)
 
 
 def normalizar_termo(texto: str) -> str:
@@ -148,30 +160,37 @@ class KeywordSpotter:
 
     def detect_in_text(self, text: str) -> Tuple[bool, Optional[str]]:
         """
-        Verifica se uma string de transcrição ou prefixo inicia com alguma das
-        palavras-chave configuradas (ex.: "Olá, quero um X-Bacon" -> True, "olá").
-        Permite até uma saudação curta antes do termo principal (ex.: "Oi Totem").
+        Verifica se uma string de transcrição ou prefixo inicia com a wake word
+        configurada ("Lexie" ou variações fonéticas do ASR como "lexi", "lxi", "lex", "leci").
+        Inspeciona as primeiras 4 palavras do lote.
         """
         norm_text = normalizar_termo(text)
         if not norm_text:
             return False, None
 
         tokens = norm_text.split()
-        # Verifica nos primeiros 2 tokens (ex: "totem ...", "ola totem ...")
-        prefix_2_tokens = " ".join(tokens[:2])
-        prefix_1_token = tokens[0]
+        initial_tokens = tokens[:4]
 
         for raw_kw, norm_kw in zip(self.keywords, self.normalized_keywords):
             if not norm_kw:
                 continue
-            candidates = LEXIE_ALIASES if norm_kw in LEXIE_ALIASES else (norm_kw,)
-            for cand in candidates:
+
+            if norm_kw in LEXIE_ALIASES:
+                for tok in initial_tokens:
+                    if (
+                        tok in LEXIE_ALIASES
+                        or tok.startswith("lex")
+                        or tok.startswith("lek")
+                        or tok.startswith("lxi")
+                        or difflib.SequenceMatcher(None, tok, "lexie").ratio() >= 0.75
+                        or difflib.SequenceMatcher(None, tok, "lexi").ratio() >= 0.75
+                    ):
+                        return True, raw_kw
+            else:
                 if (
-                    norm_text == cand
-                    or norm_text.startswith(cand + " ")
-                    or prefix_1_token == cand
-                    or (len(tokens) >= 2 and tokens[1] == cand and tokens[0] in ("oi", "ola", "ei", "hey"))
-                    or prefix_2_tokens == cand
+                    norm_text == norm_kw
+                    or norm_text.startswith(norm_kw + " ")
+                    or norm_kw in initial_tokens
                 ):
                     return True, raw_kw
 
@@ -266,7 +285,7 @@ class KeywordSpotter:
                 reason="empty_audio",
             )
 
-        # Se houver detector customizado de CPU configurado
+        # Se houver detector customizado de CPU configurado (ex: decodificador curto de prefixo 1.5s)
         if self.custom_detector is not None:
             custom_res = self.custom_detector(prefix, sr, self.keywords)
             if custom_res is not None:
@@ -277,7 +296,7 @@ class KeywordSpotter:
                     matched_keyword=kw if detected else None,
                     confidence=round(float(conf), 4),
                     cpu_time_ms=round(elapsed_ms, 3),
-                    reason="custom_cpu_detector",
+                    reason="prefix_transcription_matched" if detected else "prefix_transcription_rejected",
                 )
 
         # Análise acústica leve em CPU (RMS, Fator de Crista, Modulação Silábica e Templates)
@@ -406,7 +425,7 @@ class KeywordSpotter:
                 syllable_peaks += 1
 
         # 6. Compara com os templates registrados das palavras-chave ativas
-        best_kw: Optional[str] = self.keywords[0] if self.keywords else "totem"
+        best_kw: Optional[str] = self.keywords[0] if self.keywords else "lexie"
         best_sim = 0.0
         for raw_kw, norm_kw in zip(self.keywords, self.normalized_keywords):
             tpl = self._templates.get(norm_kw)
@@ -415,6 +434,23 @@ class KeywordSpotter:
                 if sim > best_sim:
                     best_sim = sim
                     best_kw = raw_kw
+
+        # Exige alta correspondência com o template acústico da wake word (>= 0.92)
+        # para não aprovar falas comuns que não iniciam com "Lexie" (ex: "Oi, eu queria...").
+        if best_sim < 0.92:
+            return (
+                False,
+                None,
+                round(best_sim * 0.6, 4),
+                "wake_word_not_detected_in_prefix",
+                {
+                    "rms": round(rms, 4),
+                    "modulation_index": round(modulation_index, 4),
+                    "crest_factor": round(crest_factor, 4),
+                    "syllable_peaks": syllable_peaks,
+                    "template_similarity": round(best_sim, 4),
+                },
+            )
 
         # Combina similaridade de envelope + modulação silábica + ataque inicial
         syllabic_bonus = 0.15 if 1 <= syllable_peaks <= 4 else -0.15
