@@ -26,8 +26,15 @@ from typing import Callable, Generator, List, Optional
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 warnings.filterwarnings("ignore")
 
-import librosa
-import numpy as np
+try:
+    import librosa
+except ImportError:
+    librosa = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # Adiciona o diretório raiz ao sys.path para imports
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -35,13 +42,34 @@ PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.audio_preprocessor import AudioPreprocessor
+try:
+    from src.audio_preprocessor import AudioPreprocessor
+except ImportError:
+    AudioPreprocessor = None
+
 from src.kafka_publisher import (
     DEFAULT_TOPIC,
     TranscriptKafkaPublisher,
     construir_envelope_transcricao,
 )
-from src.vad_segmenter import AudioBatch, VADSegmenter
+from src.keyword_spotter import DEFAULT_WAKE_WORDS, KeywordSpotter, WakeWordResult
+
+try:
+    from src.vad_segmenter import AudioBatch, VADSegmenter
+except ImportError:
+    from dataclasses import dataclass, field
+
+    VADSegmenter = None
+
+    @dataclass
+    class AudioBatch:
+        batch_index: int
+        audio: object
+        start_time: float
+        end_time: float
+        duration: float
+        sample_rate: int = 16000
+        metadata: dict = field(default_factory=dict)
 
 try:
     from src.TranscriptionWhisper import TranscritorWhisper
@@ -65,15 +93,36 @@ class RealtimeSpeechPipeline:
         on_transcription: Optional[Callable[[dict], None]] = None,
         origem: str = "mic_balcao_1",
         kafka_publisher: Optional[TranscriptKafkaPublisher] = None,
+        enable_wake_word: bool = False,
+        continuous_mode: Optional[bool] = None,
+        wake_words: Optional[List[str]] = None,
+        keyword_spotter: Optional[KeywordSpotter] = None,
+        preprocessor: Optional[object] = None,
+        segmenter: Optional[object] = None,
+        transcritor: Optional[object] = None,
     ):
         """
-        Inicializa o pipeline com os componentes de VAD, Transcrição e Publicação Kafka (B2).
+        Inicializa o pipeline com os componentes de VAD, Keyword Spotting (CPU),
+        Transcrição (GPU/P2) e Publicação Kafka (B2).
         """
         self.sample_rate = sample_rate
         self.apply_noise_filter = apply_noise_filter
         self.on_transcription = on_transcription
         self.origem = origem
         self.kafka_publisher = kafka_publisher
+
+        # Se `continuous_mode` for informado explicitamente:
+        # - continuous_mode=True  -> desativa filtro de wake word (despacha todos os lotes do VAD)
+        # - continuous_mode=False -> exige detecção do termo de ativação antes de enviar à GPU
+        if continuous_mode is not None:
+            self.enable_wake_word = not bool(continuous_mode)
+            self.continuous_mode = bool(continuous_mode)
+        elif keyword_spotter is not None:
+            self.enable_wake_word = bool(keyword_spotter.enabled)
+            self.continuous_mode = not self.enable_wake_word
+        else:
+            self.enable_wake_word = bool(enable_wake_word)
+            self.continuous_mode = not self.enable_wake_word
 
         self.device = device or "cuda"
 
@@ -82,26 +131,54 @@ class RealtimeSpeechPipeline:
 
         # Front-End de Áudio (CPU)
         # Desativa subtração espectral em streaming curto para evitar canibalização da fala
-        self.preprocessor = AudioPreprocessor(
-            target_sample_rate=self.sample_rate,
-            enable_spectral_subtraction=False,
-        )
-        self.segmenter = VADSegmenter(
-            sample_rate=self.sample_rate,
-            speech_threshold=speech_threshold,
-            silence_threshold_ms=silence_threshold_ms,
-            use_onnx=True,
-        )
+        if preprocessor is not None:
+            self.preprocessor = preprocessor
+        elif AudioPreprocessor is not None:
+            self.preprocessor = AudioPreprocessor(
+                target_sample_rate=self.sample_rate,
+                enable_spectral_subtraction=False,
+            )
+        else:
+            self.preprocessor = None
 
-        # Transcritor ASR (GPU)
-        self.transcritor = TranscritorWhisper(
-            model_name=model_name,
-            device=self.device,
-        )
+        if segmenter is not None:
+            self.segmenter = segmenter
+        elif VADSegmenter is not None:
+            self.segmenter = VADSegmenter(
+                sample_rate=self.sample_rate,
+                speech_threshold=speech_threshold,
+                silence_threshold_ms=silence_threshold_ms,
+                use_onnx=True,
+            )
+        else:
+            self.segmenter = None
 
-        # Fila desacoplada em RAM entre VAD (CPU) e Whisper (GPU)
+        # Filtro leve de Keyword Spotting (Wake Word) na CPU antes do ASR Whisper
+        if keyword_spotter is not None:
+            self.keyword_spotter = keyword_spotter
+            self.keyword_spotter.enabled = self.enable_wake_word
+        else:
+            self.keyword_spotter = KeywordSpotter(
+                keywords=wake_words or list(DEFAULT_WAKE_WORDS),
+                sample_rate=self.sample_rate,
+                enabled=self.enable_wake_word,
+            )
+
+        # Transcritor ASR (GPU via P2)
+        if transcritor is not None:
+            self.transcritor = transcritor
+        else:
+            self.transcritor = TranscritorWhisper(
+                model_name=model_name,
+                device=self.device,
+            )
+
+        # Fila desacoplada em RAM entre VAD+KWS (CPU) e Whisper (GPU)
         self.batch_queue: queue.Queue = queue.Queue()
         self.results: List[dict] = []
+        self.rejected_batches: List[dict] = []
+        self.batches_dispatched_to_gpu: int = 0
+        self.batches_filtered_by_kws: int = 0
         self._running = False
         self._consumer_thread: Optional[threading.Thread] = None
 
@@ -208,6 +285,45 @@ class RealtimeSpeechPipeline:
         if self.kafka_publisher is not None:
             self.kafka_publisher.flush()
 
+    def dispatch_batch_if_activated(self, batch: AudioBatch) -> bool:
+        """
+        Avalia na CPU se o lote detectado pelo VAD inicia com o termo de ativação
+        (ou se o modo contínuo está ativo) antes de despachá-lo para a fila da GPU.
+
+        Returns:
+            True se o lote foi enfileirado para inferência no Whisper (GPU);
+            False se foi bloqueado pelo filtro de Keyword Spotting na CPU.
+        """
+        self.keyword_spotter.enabled = self.enable_wake_word
+        kws_result: WakeWordResult = self.keyword_spotter.check_batch(batch)
+
+        if not hasattr(batch, "metadata") or batch.metadata is None:
+            batch.metadata = {}
+
+        batch.metadata["kws_checked"] = True
+        batch.metadata["kws_detected"] = kws_result.detected
+        batch.metadata["kws_keyword"] = kws_result.matched_keyword
+        batch.metadata["kws_confidence"] = kws_result.confidence
+        batch.metadata["kws_reason"] = kws_result.reason
+
+        if kws_result.detected:
+            self.batches_dispatched_to_gpu += 1
+            self.batch_queue.put(batch)
+            return True
+
+        self.batches_filtered_by_kws += 1
+        self.rejected_batches.append(
+            {
+                "batch_index": batch.batch_index,
+                "start_time": round(batch.start_time, 3),
+                "end_time": round(batch.end_time, 3),
+                "duration": round(batch.duration, 3),
+                "kws_confidence": kws_result.confidence,
+                "kws_reason": kws_result.reason,
+            }
+        )
+        return False
+
     def process_chunk(self, audio_chunk: np.ndarray) -> None:
         """
         Processa um bloco contínuo de áudio recebido em streaming.
@@ -216,15 +332,19 @@ class RealtimeSpeechPipeline:
             audio_chunk: Array numpy 1D com áudio capturado (ex: a cada 32ms - 100ms).
         """
         # 1. Filtro passa-banda leve na CPU
-        clean_chunk = self.preprocessor.process(
-            audio_chunk,
-            apply_noise_reduction=self.apply_noise_filter,
-        )
+        if self.preprocessor is not None:
+            clean_chunk = self.preprocessor.process(
+                audio_chunk,
+                apply_noise_reduction=self.apply_noise_filter,
+            )
+        else:
+            clean_chunk = audio_chunk
 
         # 2. VAD: empacota quando detecta pausa/silêncio
         batches = self.segmenter.push_audio(clean_chunk)
         for batch in batches:
-            self.batch_queue.put(batch)
+            # 3. Keyword Spotting na CPU: só despacha para GPU se houver wake word (ou modo contínuo)
+            self.dispatch_batch_if_activated(batch)
 
     def flush(self) -> None:
         """
@@ -232,7 +352,7 @@ class RealtimeSpeechPipeline:
         """
         last_batch = self.segmenter.flush()
         if last_batch:
-            self.batch_queue.put(last_batch)
+            self.dispatch_batch_if_activated(last_batch)
 
     def process_stream(
         self,
@@ -341,6 +461,17 @@ def main():
         default=None,
         help="Tópico Kafka de destino (default: ods.i5.transcript ou KAFKA_TOPIC)",
     )
+    parser.add_argument(
+        "--wake-word",
+        action="store_true",
+        help="Ativa o filtro leve de Keyword Spotting (Wake Word) na CPU antes de enviar lotes ao Whisper",
+    )
+    parser.add_argument(
+        "--wake-words",
+        type=str,
+        default="lexie",
+        help="Termo de ativação configurado (default: lexie)",
+    )
 
     args = parser.parse_args()
 
@@ -357,10 +488,13 @@ def main():
         )
         print(f"[I5 - Kafka] Publicando em {kafka_pub.bootstrap_servers} -> Tópico: {kafka_pub.topic}")
 
+    wake_words_list = [w.strip() for w in args.wake_words.split(",") if w.strip()]
+
     print(f"\n=======================================================")
-    print(f"   Iniciando Pipeline I5: VAD Contínuo + Whisper")
+    print(f"   Iniciando Pipeline I5: VAD Contínuo + KWS + Whisper")
     print(f"   Arquivo: {audio_file.name}")
     print(f"   Modo tempo real: {args.simulate_realtime}")
+    print(f"   Filtro Wake Word (CPU): {'ATIVO (' + ', '.join(wake_words_list) + ')' if args.wake_word else 'DESATIVADO (Modo Contínuo)'}")
     print(f"=======================================================\n")
 
     pipeline = RealtimeSpeechPipeline(
@@ -370,6 +504,8 @@ def main():
         apply_noise_filter=not args.no_noise_filter,
         origem=args.origem,
         kafka_publisher=kafka_pub,
+        enable_wake_word=args.wake_word,
+        wake_words=wake_words_list,
     )
 
     chunk_size = int(16000 * (args.chunk_ms / 1000.0))
