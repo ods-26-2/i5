@@ -235,6 +235,80 @@ class TestP2GPUAccelerationAcceptance(unittest.TestCase):
             p2_runtime.info(handle)
         self.assertEqual(ctx_rel.exception.code, RUNTIME_ERROR)
 
+    def test_criterio_4_whisper_bridge_oficial_p2(self):
+        """
+        Valida que a classe WhisperBridge fornecida oficialmente pela equipe P2
+        (examples/whisper_example.py) implementa a interface fechada P2 (load, infer,
+        info, release) e se integra perfeitamente com TranscritorWhisper.
+        """
+        from src.whisper_example import WhisperBridge
+
+        # 1. Verifica os métodos obrigatórios do contrato P2
+        self.assertTrue(callable(getattr(WhisperBridge, "load", None)))
+        self.assertTrue(callable(getattr(WhisperBridge, "infer", None)))
+        self.assertTrue(callable(getattr(WhisperBridge, "info", None)))
+        self.assertTrue(callable(getattr(WhisperBridge, "release", None)))
+
+        # 2. Testa a injeção do WhisperBridge como p2_module no TranscritorWhisper
+        class MockBridge(WhisperBridge):
+            def __init__(self):
+                self.calls = []
+                self._encoder_ref = "whisper-small-encoder-1.0.0"
+                self._decoder_ref = "whisper-small-decoder-1.0.0"
+
+            def load(self, engine_ref="", options=None):
+                self.calls.append("load")
+                return "mock_bridge_handle_123"
+
+            def info(self, handle):
+                self.calls.append("info")
+                return {
+                    "engine_version": "whisper-small-p2-official:1.0.0",
+                    "input_shape": {"input_features": [1, 80, 3000]},
+                    "output_shape": {"logits": [1, 448]},
+                    "precision": "FP16",
+                    "max_batch": 1,
+                }
+
+            def infer(self, handle, audio):
+                self.calls.append("infer")
+                return (
+                    {
+                        "text": "Dois hambúrgueres e uma porção de batata",
+                        "confidence": 0.96,
+                        "token_probs": [0.96, 0.95, 0.97],
+                    },
+                    {"latency_ms": 22.5, "gpu_memory_mb": 420.0},
+                )
+
+            def release(self, handle):
+                self.calls.append("release")
+
+        bridge_inst = MockBridge()
+        transcritor = TranscritorWhisper(
+            model_name="whisper-small",
+            p2_module=bridge_inst,
+        )
+
+        audio_dummy = _make_audio(16000 * 2, 0.1)
+        try:
+            saida = transcritor.transcrever_audio(audio_dummy, sampling_rate=16000)
+            envelope = json.loads(saida)
+            self.assertEqual(
+                envelope["payload"]["texto_transcrito"],
+                "Dois hambúrgueres e uma porção de batata",
+            )
+            self.assertEqual(envelope["artifact_version"], "whisper-small-p2-official:1.0.0")
+            self.assertEqual(envelope["payload"]["confidence"], 0.96)
+            self.assertEqual(envelope["payload"]["confianca_geral"], 0.96)
+        finally:
+            transcritor.release()
+
+        self.assertIn("load", bridge_inst.calls)
+        self.assertIn("info", bridge_inst.calls)
+        self.assertIn("infer", bridge_inst.calls)
+        self.assertIn("release", bridge_inst.calls)
+
 
 if __name__ == "__main__":
     unittest.main()

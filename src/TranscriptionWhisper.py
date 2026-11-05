@@ -51,6 +51,14 @@ except ImportError:
         construir_envelope_transcricao,
     )
 
+try:
+    from src.whisper_example import WhisperBridge
+except ImportError:
+    try:
+        from whisper_example import WhisperBridge
+    except ImportError:
+        WhisperBridge = None
+
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
@@ -77,7 +85,13 @@ class TranscritorWhisper:
         """
         self.engine_ref = model_name
         self.device = device
-        self.p2 = p2_module or default_p2_runtime
+        if p2_module is not None:
+            if isinstance(p2_module, type):
+                self.p2 = p2_module()
+            else:
+                self.p2 = p2_module
+        else:
+            self.p2 = default_p2_runtime
         self.options = dict(options or {})
         if torch_dtype and "torch_dtype" not in self.options:
             self.options["torch_dtype"] = torch_dtype
@@ -91,13 +105,18 @@ class TranscritorWhisper:
             )
 
         # 1. Carrega o engine na GPU via interface fechada P2: load(engine_ref, options)
-        self.handle: Optional[str] = self.p2.load(self.engine_ref, self.options)
+        self.handle: Optional[Any] = self.p2.load(self.engine_ref, self.options)
 
         # 2. Recupera metadados e versão exata do modelo via P2: info(handle)
-        self.engine_info: Dict[str, Any] = self.p2.info(self.handle)
-        self.artifact_version: str = str(
-            self.engine_info.get("engine_version", self.engine_ref)
-        )
+        self.engine_info: Any = self.p2.info(self.handle)
+        if isinstance(self.engine_info, dict):
+            self.artifact_version: str = str(
+                self.engine_info.get("engine_version", self.engine_ref)
+            )
+        elif hasattr(self.engine_info, "engine_version"):
+            self.artifact_version: str = str(getattr(self.engine_info, "engine_version"))
+        else:
+            self.artifact_version: str = str(self.engine_ref)
 
         # Configuração de idioma e tarefa
         self.language = language or "portuguese"
@@ -115,9 +134,12 @@ class TranscritorWhisper:
         if self.handle is None:
             raise RuntimeError("O handle do engine P2 já foi liberado.")
         self.engine_info = self.p2.info(self.handle)
-        self.artifact_version = str(
-            self.engine_info.get("engine_version", self.engine_ref)
-        )
+        if isinstance(self.engine_info, dict):
+            self.artifact_version = str(
+                self.engine_info.get("engine_version", self.engine_ref)
+            )
+        elif hasattr(self.engine_info, "engine_version"):
+            self.artifact_version = str(getattr(self.engine_info, "engine_version"))
         return self.engine_info
 
     def transcrever_audio(

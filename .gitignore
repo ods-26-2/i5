@@ -5,3 +5,6 @@ __pycache__/
 .pytest_cache/
 output_batches/
 jsons_gerados/*.json
+models/
+
+

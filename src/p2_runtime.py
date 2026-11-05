@@ -93,11 +93,22 @@ def _create_local_whisper_backend(engine_ref: str, opts: Dict[str, Any]) -> Opti
         f"[P2 Local Fallback] Carregando '{hf_model_id}' localmente em {device.upper()} ({dtype}) "
         f"sob o contrato P2 (engine_ref='{engine_ref}')..."
     )
-    processor = WhisperProcessor.from_pretrained(hf_model_id)
-    model = WhisperForConditionalGeneration.from_pretrained(
-        hf_model_id,
-        torch_dtype=dtype,
-    ).to(device)
+    try:
+        processor = WhisperProcessor.from_pretrained(hf_model_id, local_files_only=True)
+    except Exception:
+        processor = WhisperProcessor.from_pretrained(hf_model_id)
+
+    try:
+        model = WhisperForConditionalGeneration.from_pretrained(
+            hf_model_id,
+            torch_dtype=dtype,
+            local_files_only=True,
+        ).to(device)
+    except Exception:
+        model = WhisperForConditionalGeneration.from_pretrained(
+            hf_model_id,
+            torch_dtype=dtype,
+        ).to(device)
     model.eval()
 
     def _run_local_infer(audio: Any) -> Dict[str, Any]:
