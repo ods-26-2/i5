@@ -557,6 +557,12 @@ def main():
         default="lexie",
         help="Termo de ativação configurado (default: lexie)",
     )
+    parser.add_argument(
+        "--replay-json",
+        type=str,
+        default=None,
+        help="Reenvia diretamente um arquivo JSON já gerado (ou da pasta jsons_gerados) para o Kafka ods.i5.transcript",
+    )
 
     args = parser.parse_args()
 
@@ -606,6 +612,56 @@ def main():
             pipeline.flush()
             pipeline.stop()
             print(f"\n[I5 - Pipeline] Finalizado. Total de frases/batches transcritos: {len(pipeline.results)}")
+        return
+
+    # Modo Replay de JSON já existente no I5
+    if args.replay_json:
+        caminho_json = Path(args.replay_json)
+        if not caminho_json.exists():
+            caminho_json = PROJECT_ROOT / "jsons_gerados" / args.replay_json
+        if not caminho_json.exists():
+            print(f"Erro: Arquivo JSON '{args.replay_json}' não encontrado.")
+            sys.exit(1)
+
+        with open(caminho_json, "r", encoding="utf-8") as f:
+            dados = json.load(f)
+
+        pub = TranscriptKafkaPublisher(
+            bootstrap_servers=args.kafka_broker,
+            topic=args.kafka_topic or "ods.i5.transcript",
+        )
+        print(f"\n[I5 - Replay] Enviando {caminho_json.name} para o Kafka ({pub.bootstrap_servers} -> {pub.topic})...")
+        payload_interno = dados.setdefault("payload", {})
+        texto = payload_interno.get("texto_transcrito") or payload_interno.get("texto", "")
+        conf = payload_interno.get("confianca_geral", payload_interno.get("confidence", 0.95))
+
+        # Garante conformidade com o contrato moderno B1/B2
+        if "uncertain" not in payload_interno:
+            payload_interno["uncertain"] = bool(payload_interno.get("duvida_explicita", False) or conf < 0.5)
+        if "confianca_geral" not in payload_interno:
+            payload_interno["confianca_geral"] = float(conf)
+        if "confidence" not in payload_interno:
+            payload_interno["confidence"] = float(conf)
+        if "origem" not in payload_interno:
+            payload_interno["origem"] = args.origem or "mic_balcao_1"
+        if "timestamp_inicio" not in payload_interno:
+            payload_interno["timestamp_inicio"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        if "timestamp_fim" not in payload_interno:
+            payload_interno["timestamp_fim"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        # Garante message_id único e timestamp fresco
+        import uuid
+        dados["message_id"] = str(uuid.uuid4())
+        dados["message_type"] = "event"
+        dados["producer"] = "I5"
+        dados["schema_version"] = "1.0"
+        dados["artifact_version"] = dados.get("artifact_version", "whisper-small-trt-fp16:1.0.0")
+        dados["published_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+        dados["occurred_at"] = dados["published_at"]
+        dados["schema"] = pub.topic
+
+        pub.publish_envelope(dados, flush=True)
+        print(f"[I5 - Replay] Sucesso! Texto: \"{texto}\" (conf: {conf})\n")
         return
 
     # 4. Modo Local/Arquivo
