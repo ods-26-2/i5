@@ -94,11 +94,13 @@ def construir_envelope_transcricao(
     limiar_confianca: float = 0.5,
     schema: Optional[str] = None,
     schema_version: str = DEFAULT_SCHEMA_VERSION,
+    artifact_version: str = "whisper-small-trt-fp16:1.0.0",
     occurred_at: Optional[str] = None,
     extra_payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Constrói o envelope padrão B1/B2 para publicação de transcrições do componente I5.
+    Constrói o envelope padrão B1/B2 para publicação de transcrições do componente I5,
+    incluindo o `artifact_version` recuperado via `p2.info(handle)`.
     """
     agora_iso = occurred_at or utc_now_iso()
     ts_inicio = timestamp_inicio or agora_iso
@@ -138,6 +140,7 @@ def construir_envelope_transcricao(
         "schema": schema_final,
         "schema_version": str(schema_version),
         "producer": PRODUCER_ID,
+        "artifact_version": str(artifact_version),
         "occurred_at": agora_iso,
         "published_at": agora_iso,
         "payload": payload,
@@ -279,12 +282,13 @@ class TranscriptKafkaPublisher:
         timestamp_inicio: Optional[str] = None,
         timestamp_fim: Optional[str] = None,
         ruido_excessivo: bool = False,
+        artifact_version: str = "whisper-small-trt-fp16:1.0.0",
         extra_payload: Optional[Dict[str, Any]] = None,
         flush: bool = True,
         flush_timeout: float = 5.0,
     ) -> Dict[str, Any]:
         """
-        Monta o envelope padrão B1/B2 com `uncertain` calculado e publica no Kafka.
+        Monta o envelope padrão B1/B2 com `uncertain` e `artifact_version` e publica no Kafka.
         """
         envelope = construir_envelope_transcricao(
             texto_transcrito=texto_transcrito,
@@ -296,6 +300,7 @@ class TranscriptKafkaPublisher:
             ruido_excessivo=ruido_excessivo,
             limiar_confianca=self.limiar_confianca,
             schema=self.topic,
+            artifact_version=artifact_version,
             extra_payload=extra_payload,
         )
         self.publish_envelope(envelope, flush=flush, flush_timeout=flush_timeout)

@@ -28,7 +28,6 @@ warnings.filterwarnings("ignore")
 
 import librosa
 import numpy as np
-import torch
 
 # Adiciona o diretório raiz ao sys.path para imports
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -76,13 +75,10 @@ class RealtimeSpeechPipeline:
         self.origem = origem
         self.kafka_publisher = kafka_publisher
 
-        if device is None:
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            self.device = device
+        self.device = device or "cuda"
 
         print(f"[I5 - Pipeline] Inicializando componentes...")
-        print(f"[I5 - Pipeline] Device de inferência Whisper: {self.device}")
+        print(f"[I5 - Pipeline] Runtime de inferência P2 (device alvo: {self.device})")
 
         # Front-End de Áudio (CPU)
         # Desativa subtração espectral em streaming curto para evitar canibalização da fala
@@ -200,13 +196,15 @@ class RealtimeSpeechPipeline:
 
     def stop(self) -> None:
         """
-        Encerra a thread consumidora, aguarda a finalização dos batches pendentes
-        e faz flush do produtor Kafka (B2).
+        Encerra a thread consumidora, aguarda a finalização dos batches pendentes,
+        libera o engine na GPU via P2 (`release`) e faz flush do produtor Kafka (B2).
         """
         self._running = False
         self.batch_queue.put(None)  # Envia sinalizador de término
         if self._consumer_thread and self._consumer_thread.is_alive():
             self._consumer_thread.join()
+        if hasattr(self.transcritor, "release"):
+            self.transcritor.release()
         if self.kafka_publisher is not None:
             self.kafka_publisher.flush()
 
