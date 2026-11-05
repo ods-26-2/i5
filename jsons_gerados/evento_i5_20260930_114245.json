@@ -1,0 +1,16 @@
+{
+  "message_type": "event",
+  "schema": "ods.varejo.transcricao",
+  "schema_version": "1.0",
+  "producer": "I5",
+  "published_at": "2026-09-30T14:42:45.632402+00:00",
+  "payload": {
+    "origem": "mic_balcao_1",
+    "timestamp_inicio": "2026-09-16T14:05:00+00:00",
+    "timestamp_fim": "2026-09-16T14:05:15.893500+00:00",
+    "texto_transcrito": "Oi, eu queria fazer um pedido... Estou pensando... Eu quero um X, um X Bacon, que era um milkshake.",
+    "texto_preprocessado": "oi , eu querer fazer um pedido . estar pensar . eu querer um x , um x bacon , que ser um milkshake .",
+    "confianca_geral": 0.7315,
+    "duvida_explicita": false
+  }
+}

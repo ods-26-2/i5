@@ -21,15 +21,21 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional, Union
 
 # Suprime avisos de depreciação do Transformers/PyTorch
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 warnings.filterwarnings("ignore")
 
-import librosa
-import numpy as np
-import torch
+try:
+    import librosa
+except ImportError:
+    librosa = None
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 # Adiciona o diretório raiz ao sys.path para imports
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -37,9 +43,35 @@ PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.audio_preprocessor import AudioPreprocessor
+try:
+    from src.audio_preprocessor import AudioPreprocessor
+except ImportError:
+    AudioPreprocessor = None
+
 from src.config_loader import load_pipeline_config
-from src.vad_segmenter import AudioBatch, VADSegmenter
+from src.kafka_publisher import (
+    DEFAULT_TOPIC,
+    TranscriptKafkaPublisher,
+    construir_envelope_transcricao,
+)
+from src.keyword_spotter import DEFAULT_WAKE_WORDS, KeywordSpotter, WakeWordResult
+
+try:
+    from src.vad_segmenter import AudioBatch, VADSegmenter
+except ImportError:
+    from dataclasses import dataclass, field
+
+    VADSegmenter = None
+
+    @dataclass
+    class AudioBatch:
+        batch_index: int
+        audio: object
+        start_time: float
+        end_time: float
+        duration: float
+        sample_rate: int = 16000
+        metadata: dict = field(default_factory=dict)
 
 try:
     from src.TranscriptionWhisper import TranscritorWhisper
@@ -57,11 +89,20 @@ class RealtimeSpeechPipeline:
         config: Optional[Dict[str, Any]] = None,
         config_path: Optional[str] = None,
         on_transcription: Optional[Callable[[dict], None]] = None,
+        origem: str = "mic_balcao_1",
+        kafka_publisher: Optional[TranscriptKafkaPublisher] = None,
+        enable_wake_word: bool = False,
+        continuous_mode: Optional[bool] = None,
+        wake_words: Optional[List[str]] = None,
+        keyword_spotter: Optional[KeywordSpotter] = None,
+        preprocessor: Optional[object] = None,
+        segmenter: Optional[object] = None,
+        transcritor: Optional[object] = None,
         **overrides,
     ):
         """
-        Inicializa o pipeline a partir de dicionário de configuração, arquivo YAML
-        ou parâmetros diretos com precedência para overrides.
+        Inicializa o pipeline com os componentes de VAD, Keyword Spotting (CPU),
+        Transcrição (GPU/P2) e Publicação Kafka (B2), aceitando arquivo YAML e overrides.
         """
         # Carrega configuração base
         if config is not None:
@@ -86,12 +127,14 @@ class RealtimeSpeechPipeline:
             self.config["whisper"]["language"] = overrides["language"]
 
         self.on_transcription = on_transcription
+        self.origem = origem
+        self.kafka_publisher = kafka_publisher
 
-        audio_cfg = self.config["audio"]
-        prep_cfg = self.config["preprocessor"]
-        vad_cfg = self.config["vad"]
-        whisper_cfg = self.config["whisper"]
-        output_cfg = self.config["output"]
+        audio_cfg = self.config.get("audio", {})
+        prep_cfg = self.config.get("preprocessor", {})
+        vad_cfg = self.config.get("vad", {})
+        whisper_cfg = self.config.get("whisper", {})
+        output_cfg = self.config.get("output", {})
 
         self.sample_rate = audio_cfg.get("sample_rate", 16000)
         self.apply_noise_filter = prep_cfg.get("apply_noise_filter", True)
@@ -101,42 +144,85 @@ class RealtimeSpeechPipeline:
         self.json_dir = output_cfg.get("json_dir", "jsons_gerados")
         self.min_confidence_warning = output_cfg.get("min_confidence_warning", 0.50)
 
+        # Se continuous_mode for informado explicitamente:
+        if continuous_mode is not None:
+            self.enable_wake_word = not bool(continuous_mode)
+            self.continuous_mode = bool(continuous_mode)
+        elif keyword_spotter is not None:
+            self.enable_wake_word = bool(keyword_spotter.enabled)
+            self.continuous_mode = not self.enable_wake_word
+        else:
+            self.enable_wake_word = bool(enable_wake_word)
+            self.continuous_mode = not self.enable_wake_word
+
+        self.device = whisper_cfg.get("device", "auto")
+        if self.device == "auto" or self.device is None:
+            self.device = "cuda"
+
         config_source = self.config.get("_config_file") or "Defaults embutidos"
         print(f"[I5 - Pipeline] Configuração carregada de: {config_source}")
+        print(f"[I5 - Pipeline] Runtime de inferência P2 (device alvo: {self.device})")
 
         # Front-End de Áudio (CPU)
-        self.preprocessor = AudioPreprocessor(
-            target_sample_rate=self.sample_rate,
-            lowcut=prep_cfg.get("lowcut_hz", 80.0),
-            highcut=prep_cfg.get("highcut_hz", 7500.0),
-            filter_order=prep_cfg.get("filter_order", 5),
-            enable_spectral_subtraction=prep_cfg.get("enable_spectral_subtraction", False),
-        )
+        if preprocessor is not None:
+            self.preprocessor = preprocessor
+        elif AudioPreprocessor is not None:
+            self.preprocessor = AudioPreprocessor(
+                target_sample_rate=self.sample_rate,
+                lowcut=prep_cfg.get("lowcut_hz", 80.0),
+                highcut=prep_cfg.get("highcut_hz", 7500.0),
+                filter_order=prep_cfg.get("filter_order", 5),
+                enable_spectral_subtraction=prep_cfg.get("enable_spectral_subtraction", False),
+            )
+        else:
+            self.preprocessor = None
 
         # Voice Activity Detection (Silero VAD na CPU via ONNX)
-        self.segmenter = VADSegmenter(
-            sample_rate=self.sample_rate,
-            speech_threshold=vad_cfg.get("speech_threshold", 0.50),
-            silence_threshold_ms=vad_cfg.get("silence_threshold_ms", 700),
-            pre_speech_pad_ms=vad_cfg.get("pre_speech_pad_ms", 250),
-            post_speech_pad_ms=vad_cfg.get("post_speech_pad_ms", 200),
-            min_speech_duration_ms=vad_cfg.get("min_speech_duration_ms", 250),
-            use_onnx=vad_cfg.get("use_onnx", True),
-        )
+        if segmenter is not None:
+            self.segmenter = segmenter
+        elif VADSegmenter is not None:
+            self.segmenter = VADSegmenter(
+                sample_rate=self.sample_rate,
+                speech_threshold=vad_cfg.get("speech_threshold", 0.50),
+                silence_threshold_ms=vad_cfg.get("silence_threshold_ms", 700),
+                pre_speech_pad_ms=vad_cfg.get("pre_speech_pad_ms", 250),
+                post_speech_pad_ms=vad_cfg.get("post_speech_pad_ms", 200),
+                min_speech_duration_ms=vad_cfg.get("min_speech_duration_ms", 250),
+                use_onnx=vad_cfg.get("use_onnx", True),
+            )
+        else:
+            self.segmenter = None
 
-        # Transcritor ASR (Whisper na GPU)
-        self.transcritor = TranscritorWhisper(
-            model_name=whisper_cfg.get("model_name", "openai/whisper-small"),
-            device=whisper_cfg.get("device", "auto"),
-            language=whisper_cfg.get("language", "portuguese"),
-            task=whisper_cfg.get("task", "transcribe"),
-            torch_dtype=whisper_cfg.get("torch_dtype", "float16"),
-        )
-        print(f"[I5 - Pipeline] Whisper iniciado no device: {self.transcritor.device} (modelo: {whisper_cfg.get('model_name')})")
+        # Filtro leve de Keyword Spotting (Wake Word) na CPU antes do ASR Whisper
+        if keyword_spotter is not None:
+            self.keyword_spotter = keyword_spotter
+            self.keyword_spotter.enabled = self.enable_wake_word
+        else:
+            self.keyword_spotter = KeywordSpotter(
+                keywords=wake_words or list(DEFAULT_WAKE_WORDS),
+                sample_rate=self.sample_rate,
+                enabled=self.enable_wake_word,
+            )
 
-        # Fila desacoplada em RAM entre VAD (CPU) e Whisper (GPU)
+        # Transcritor ASR (Whisper na GPU via P2)
+        if transcritor is not None:
+            self.transcritor = transcritor
+        else:
+            self.transcritor = TranscritorWhisper(
+                model_name=whisper_cfg.get("model_name", "openai/whisper-small"),
+                device=self.device,
+                language=whisper_cfg.get("language", "portuguese"),
+                task=whisper_cfg.get("task", "transcribe"),
+                torch_dtype=whisper_cfg.get("torch_dtype", "float16"),
+            )
+        print(f"[I5 - Pipeline] Whisper iniciado no device: {getattr(self.transcritor, 'device', self.device)} (modelo: {whisper_cfg.get('model_name')})")
+
+        # Fila desacoplada em RAM entre VAD+KWS (CPU) e Whisper (GPU)
         self.batch_queue: queue.Queue = queue.Queue()
         self.results: List[dict] = []
+        self.rejected_batches: List[dict] = []
+        self.batches_dispatched_to_gpu: int = 0
+        self.batches_filtered_by_kws: int = 0
         self._running = False
         self._consumer_thread: Optional[threading.Thread] = None
 
@@ -165,8 +251,8 @@ class RealtimeSpeechPipeline:
             inference_start = time.perf_counter()
 
             # 1. Base temporal da transcrição ancorada no captured_at de P5
-            timestamp_inicio = batch.start_at or datetime.datetime.now(datetime.timezone.utc).isoformat()
-            origem = batch.metadata.get("origem", "ods.p5.audio_chunk")
+            timestamp_inicio = getattr(batch, "start_at", None) or datetime.datetime.now(datetime.timezone.utc).isoformat()
+            origem = batch.metadata.get("origem", self.origem)
 
             # 2. Chama a IA que retorna o JSON oficial (String)
             json_contrato_string = self.transcritor.transcrever_audio(
@@ -179,11 +265,20 @@ class RealtimeSpeechPipeline:
             inference_time_ms = (time.perf_counter() - inference_start) * 1000
 
             # 3. Lê o JSON de volta para extrair dados
-            dados_contrato = json.loads(json_contrato_string)
-            payload_interno = dados_contrato["payload"]
+            if isinstance(json_contrato_string, str):
+                dados_contrato = json.loads(json_contrato_string)
+            else:
+                dados_contrato = json_contrato_string
+                json_contrato_string = json.dumps(dados_contrato, ensure_ascii=False)
 
-            texto_extraido = payload_interno["texto_transcrito"]
-            confianca_extraida = payload_interno["confianca_geral"]
+            payload_interno = dados_contrato.get("payload", {})
+            texto_extraido = payload_interno.get("texto_transcrito", "")
+            confianca_extraida = payload_interno.get("confianca_geral", payload_interno.get("confidence", 0.0))
+            uncertain_flag = payload_interno.get("uncertain", bool(confianca_extraida < 0.5))
+
+            # Publica no barramento Kafka (tópico ods.i5.transcript) se o produtor estiver ativo
+            if self.kafka_publisher is not None:
+                self.kafka_publisher.publish_envelope(dados_contrato, flush=False)
 
             self.results.append(dados_contrato)
 
@@ -203,7 +298,7 @@ class RealtimeSpeechPipeline:
                 alerta = " ⚠️ (baixa confiança)" if confianca_extraida < self.min_confidence_warning else ""
                 print(
                     f"[{batch.start_time:6.2f}s -> {batch.end_time:6.2f}s] "
-                    f"(conf: {confianca_extraida:.2f}{alerta} | {inference_time_ms:.0f}ms) "
+                    f"(conf: {confianca_extraida:.2f}{alerta} | uncertain: {uncertain_flag} | {inference_time_ms:.0f}ms) "
                     f"=> \"{texto_extraido}\"{caminho_arquivo_str}"
                 )
 
@@ -224,12 +319,56 @@ class RealtimeSpeechPipeline:
 
     def stop(self) -> None:
         """
-        Encerra a thread consumidora e aguarda a finalização dos batches pendentes.
+        Encerra a thread consumidora, aguarda a finalização dos batches pendentes,
+        libera o engine na GPU via P2 (`release`) e faz flush do produtor Kafka (B2).
         """
         self._running = False
         self.batch_queue.put(None)  # Envia sinalizador de término
         if self._consumer_thread and self._consumer_thread.is_alive():
             self._consumer_thread.join()
+        if hasattr(self.transcritor, "release"):
+            self.transcritor.release()
+        if self.kafka_publisher is not None:
+            self.kafka_publisher.flush()
+
+    def dispatch_batch_if_activated(self, batch: AudioBatch) -> bool:
+        """
+        Avalia na CPU se o lote detectado pelo VAD inicia com o termo de ativação
+        (ou se o modo contínuo está ativo) antes de despachá-lo para a fila da GPU.
+
+        Returns:
+            True se o lote foi enfileirado para inferência no Whisper (GPU);
+            False se foi bloqueado pelo filtro de Keyword Spotting na CPU.
+        """
+        self.keyword_spotter.enabled = self.enable_wake_word
+        kws_result: WakeWordResult = self.keyword_spotter.check_batch(batch)
+
+        if not hasattr(batch, "metadata") or batch.metadata is None:
+            batch.metadata = {}
+
+        batch.metadata["kws_checked"] = True
+        batch.metadata["kws_detected"] = kws_result.detected
+        batch.metadata["kws_keyword"] = kws_result.matched_keyword
+        batch.metadata["kws_confidence"] = kws_result.confidence
+        batch.metadata["kws_reason"] = kws_result.reason
+
+        if kws_result.detected:
+            self.batches_dispatched_to_gpu += 1
+            self.batch_queue.put(batch)
+            return True
+
+        self.batches_filtered_by_kws += 1
+        self.rejected_batches.append(
+            {
+                "batch_index": batch.batch_index,
+                "start_time": round(batch.start_time, 3),
+                "end_time": round(batch.end_time, 3),
+                "duration": round(batch.duration, 3),
+                "kws_confidence": kws_result.confidence,
+                "kws_reason": kws_result.reason,
+            }
+        )
+        return False
 
     def process_chunk(
         self,
@@ -244,15 +383,22 @@ class RealtimeSpeechPipeline:
             captured_at: Timestamp de captura emitido pelo hardware/P5 (ISO 8601 ou epoch).
         """
         # 1. Filtro passa-banda leve na CPU
-        clean_chunk = self.preprocessor.process(
-            audio_chunk,
-            apply_noise_reduction=self.apply_noise_filter,
-        )
+        if self.preprocessor is not None:
+            clean_chunk = self.preprocessor.process(
+                audio_chunk,
+                apply_noise_reduction=self.apply_noise_filter,
+            )
+        else:
+            clean_chunk = audio_chunk
 
         # 2. VAD: empacota quando detecta pausa/silêncio ancorando captured_at
-        batches = self.segmenter.push_audio(clean_chunk, captured_at=captured_at)
+        try:
+            batches = self.segmenter.push_audio(clean_chunk, captured_at=captured_at)
+        except TypeError:
+            batches = self.segmenter.push_audio(clean_chunk)
         for batch in batches:
-            self.batch_queue.put(batch)
+            # 3. Keyword Spotting na CPU: só despacha para GPU se houver wake word (ou modo contínuo)
+            self.dispatch_batch_if_activated(batch)
 
     def flush(self) -> None:
         """
@@ -260,7 +406,7 @@ class RealtimeSpeechPipeline:
         """
         last_batch = self.segmenter.flush()
         if last_batch:
-            self.batch_queue.put(last_batch)
+            self.dispatch_batch_if_activated(last_batch)
 
     def process_stream(
         self,
@@ -377,6 +523,40 @@ def main():
         action="store_true",
         help="Consome áudio em streaming diretamente do barramento Kafka (P5 - ods.p5.audio_chunk)",
     )
+    parser.add_argument(
+        "--origem",
+        type=str,
+        default="mic_balcao_1",
+        help="Identificador da origem/microfone no payload (default: mic_balcao_1)",
+    )
+    parser.add_argument(
+        "--publish-kafka",
+        action="store_true",
+        help="Ativa publicação dos eventos de transcrição no tópico Kafka ods.i5.transcript",
+    )
+    parser.add_argument(
+        "--kafka-broker",
+        type=str,
+        default=None,
+        help="Endereço do broker Kafka (default: 34.66.235.91:9093 ou KAFKA_BOOTSTRAP_SERVERS)",
+    )
+    parser.add_argument(
+        "--kafka-topic",
+        type=str,
+        default=None,
+        help="Tópico Kafka de destino (default: ods.i5.transcript ou KAFKA_TOPIC)",
+    )
+    parser.add_argument(
+        "--wake-word",
+        action="store_true",
+        help="Ativa o filtro leve de Keyword Spotting (Wake Word) na CPU antes de enviar lotes ao Whisper",
+    )
+    parser.add_argument(
+        "--wake-words",
+        type=str,
+        default="lexie",
+        help="Termo de ativação configurado (default: lexie)",
+    )
 
     args = parser.parse_args()
 
@@ -438,15 +618,32 @@ def main():
     chunk_ms = config["audio"].get("chunk_duration_ms", 100)
     simulate_realtime = config["audio"].get("simulate_realtime", False)
 
+    kafka_pub = None
+    if args.publish_kafka:
+        kafka_pub = TranscriptKafkaPublisher(
+            bootstrap_servers=args.kafka_broker,
+            topic=args.kafka_topic,
+        )
+        print(f"[I5 - Kafka] Publicando em {kafka_pub.bootstrap_servers} -> Tópico: {kafka_pub.topic}")
+
+    wake_words_list = [w.strip() for w in args.wake_words.split(",") if w.strip()]
+
     print(f"\n=======================================================")
-    print(f"   Iniciando Pipeline I5: VAD Contínuo + Whisper")
+    print(f"   Iniciando Pipeline I5: VAD Contínuo + KWS + Whisper")
     print(f"   Arquivo: {audio_file.name}")
     print(f"   Modo tempo real: {simulate_realtime}")
+    print(f"   Filtro Wake Word (CPU): {'ATIVO (' + ', '.join(wake_words_list) + ')' if args.wake_word else 'DESATIVADO (Modo Contínuo)'}")
     print(f"   VAD Speech Threshold: {config['vad'].get('speech_threshold')}")
     print(f"   VAD Silence Threshold: {config['vad'].get('silence_threshold_ms')}ms")
     print(f"=======================================================\n")
 
-    pipeline = RealtimeSpeechPipeline(config=config)
+    pipeline = RealtimeSpeechPipeline(
+        config=config,
+        origem=args.origem,
+        kafka_publisher=kafka_pub,
+        enable_wake_word=args.wake_word,
+        wake_words=wake_words_list,
+    )
 
     chunk_size = int(sample_rate * (chunk_ms / 1000.0))
     stream = simulate_audio_stream(

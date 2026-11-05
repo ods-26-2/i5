@@ -9,4 +9,4 @@ numpy
 librosa
 spacy
 pyyaml>=6.0.0
-confluent-kafka>=2.6.0
+confluent-kafka>=2.4.0
