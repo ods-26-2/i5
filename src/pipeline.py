@@ -27,6 +27,17 @@ from typing import Any, Callable, Dict, Generator, List, Optional, Union
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 warnings.filterwarnings("ignore")
 
+# Adiciona o diretório raiz ao sys.path para imports
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CURRENT_DIR.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# Garante prioridade para os pacotes nativos Python 3.12 (NumPy, Confluent Kafka)
+_A7_SITE = PROJECT_ROOT.parent / "a7" / ".venv" / "lib" / "python3.12" / "site-packages"
+if _A7_SITE.exists() and str(_A7_SITE) not in sys.path:
+    sys.path.insert(0, str(_A7_SITE))
+
 try:
     import librosa
 except ImportError:
@@ -36,12 +47,6 @@ try:
     import numpy as np
 except ImportError:
     np = None
-
-# Adiciona o diretório raiz ao sys.path para imports
-CURRENT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CURRENT_DIR.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from src.audio_preprocessor import AudioPreprocessor
@@ -58,20 +63,23 @@ from src.keyword_spotter import DEFAULT_WAKE_WORDS, KeywordSpotter, WakeWordResu
 
 try:
     from src.vad_segmenter import AudioBatch, VADSegmenter
-except ImportError:
-    from dataclasses import dataclass, field
+except Exception:
+    try:
+        from src.energy_vad import AudioBatch, EnergyVADSegmenter as VADSegmenter
+    except Exception:
+        from dataclasses import dataclass, field
 
-    VADSegmenter = None
+        VADSegmenter = None
 
-    @dataclass
-    class AudioBatch:
-        batch_index: int
-        audio: object
-        start_time: float
-        end_time: float
-        duration: float
-        sample_rate: int = 16000
-        metadata: dict = field(default_factory=dict)
+        @dataclass
+        class AudioBatch:
+            batch_index: int
+            audio: object
+            start_time: float
+            end_time: float
+            duration: float
+            sample_rate: int = 16000
+            metadata: dict = field(default_factory=dict)
 
 try:
     from src.TranscriptionWhisper import TranscritorWhisper
@@ -464,6 +472,30 @@ class RealtimeSpeechPipeline:
         return self.results
 
 
+def carregar_audio_16k(file_path: str, target_sample_rate: int = 16000) -> tuple:
+    """
+    Carrega o arquivo de áudio de forma robusta e o reamostra para 16kHz mono.
+    Tenta librosa primeiro e, se houver incompatibilidade de extensão C (ex.: soxr),
+    usa soundfile + scipy.signal.
+    """
+    try:
+        import soundfile as sf
+        import scipy.signal as sps
+        data, sr = sf.read(str(file_path))
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        data = data.astype(np.float32)
+        if sr != target_sample_rate:
+            num_samples = int(len(data) * target_sample_rate / sr)
+            data = sps.resample(data, num_samples).astype(np.float32)
+        return data, target_sample_rate
+    except Exception:
+        if librosa is not None:
+            data, sr = librosa.load(file_path, sr=target_sample_rate, mono=True)
+            return data, sr
+        raise
+
+
 def simulate_audio_stream(
     file_path: str,
     target_sample_rate: int = 16000,
@@ -474,7 +506,7 @@ def simulate_audio_stream(
     Simula uma fonte contínua de áudio (P5) lendo um arquivo e gerando pedaços sequenciais.
     Garante reamostragem a 16.000 Hz mono para compatibilidade com Silero VAD e Whisper.
     """
-    data, sr = librosa.load(file_path, sr=target_sample_rate, mono=True)
+    data, sr = carregar_audio_16k(file_path, target_sample_rate=target_sample_rate)
 
     total_samples = len(data)
     for i in range(0, total_samples, chunk_size_samples):

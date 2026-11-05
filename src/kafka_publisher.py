@@ -24,7 +24,16 @@ from typing import Any, Callable, Dict, Optional, Tuple
 try:
     from confluent_kafka import Producer as ConfluentProducer
 except ImportError:
-    ConfluentProducer = None
+    # Tenta carregar do ambiente virtual a7/.venv caso o venv do I5 não possua o pacote instalado
+    import sys
+    from pathlib import Path
+    _a7_site_packages = Path(__file__).resolve().parent.parent.parent / "a7" / ".venv" / "lib" / "python3.12" / "site-packages"
+    if _a7_site_packages.exists() and str(_a7_site_packages) not in sys.path:
+        sys.path.append(str(_a7_site_packages))
+    try:
+        from confluent_kafka import Producer as ConfluentProducer
+    except ImportError:
+        ConfluentProducer = None
 
 logger = logging.getLogger(__name__)
 
