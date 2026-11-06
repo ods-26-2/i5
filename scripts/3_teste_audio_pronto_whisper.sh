@@ -13,8 +13,31 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 I5_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Resolve caminho do áudio antes de trocar de diretório
-AUDIO_ARG="$1"
+ORIGEM="${ORIGEM:-mic_balcao_1}"
+AUDIO_ARG=""
+REMAINING_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --origem|-o)
+            ORIGEM="$2"
+            shift 2
+            ;;
+        --origem=*)
+            ORIGEM="${1#*=}"
+            shift
+            ;;
+        *)
+            if [ -z "$AUDIO_ARG" ] && [[ "$1" != -* ]]; then
+                AUDIO_ARG="$1"
+            else
+                REMAINING_ARGS+=("$1")
+            fi
+            shift
+            ;;
+    esac
+done
+
 AUDIO_FILE=""
 
 if [ -n "$AUDIO_ARG" ]; then
@@ -61,7 +84,10 @@ if [ -z "$AUDIO_FILE" ]; then
         echo ""
         read -r -p "Escolha o número do áudio [1-${#AUDIOS[@]}] ou informe o caminho: " ESCOLHA
 
-        if [[ "$ESCOLHA" =~ ^[0-9]+$ ]] && [ "$ESCOLHA" -ge 1 ] && [ "$ESCOLHA" -le "${#AUDIOS[@]}" ]; then
+        if [ "$ESCOLHA" = "q" ] || [ "$ESCOLHA" = "Q" ] || [ "$ESCOLHA" = "sair" ]; then
+            echo "Cancelado."
+            exit 0
+        elif [[ "$ESCOLHA" =~ ^[0-9]+$ ]] && [ "$ESCOLHA" -ge 1 ] && [ "$ESCOLHA" -le "${#AUDIOS[@]}" ]; then
             AUDIO_FILE="${AUDIOS[$((ESCOLHA - 1))]}"
         else
             AUDIO_FILE="$ESCOLHA"
@@ -74,32 +100,13 @@ if [ ! -f "$AUDIO_FILE" ]; then
     exit 1
 fi
 
-ORIGEM="${ORIGEM:-mic_balcao_1}"
-ORIGEM_PASSED=false
-for arg in "$@"; do
-    if [ "$arg" = "--origem" ]; then
-        ORIGEM_PASSED=true
-        break
-    fi
-done
-
-EXTRA_ARGS=()
-if [ "$ORIGEM_PASSED" = false ]; then
-    EXTRA_ARGS=(--origem "$ORIGEM")
-fi
-
 echo "------------------------------------------------------------------"
 echo "Processando áudio: $AUDIO_FILE"
 echo "Origem no Kafka  : $ORIGEM"
 echo "Publicando resultado em ods.i5.transcript..."
 echo "------------------------------------------------------------------"
 
-# Remove o primeiro argumento se era o caminho do áudio para não duplicar no "$@"
-if [ $# -gt 0 ]; then
-    shift
-fi
-
 exec "$PYTHON_EXEC" src/pipeline.py "$AUDIO_FILE" \
     --publish-kafka \
-    "${EXTRA_ARGS[@]}" \
-    "$@"
+    --origem "$ORIGEM" \
+    "${REMAINING_ARGS[@]}"

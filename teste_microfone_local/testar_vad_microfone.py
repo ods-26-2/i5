@@ -23,7 +23,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Optional
 
 # Adiciona a raiz do projeto I5 ao sys.path para importar os módulos oficiais de `src/`
 CURRENT_DIR = Path(__file__).resolve().parent
