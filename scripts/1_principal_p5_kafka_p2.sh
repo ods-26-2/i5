@@ -27,8 +27,23 @@ export PYTHONPATH="$I5_DIR"
 
 echo "=================================================================="
 echo "   [CENÁRIO 1 - PRINCIPAL] I5 + P5 KAFKA STREAMING + P2 TENSORRT"
+ORIGEM="${ORIGEM:-mic_balcao_1}"
+ORIGEM_PASSED=false
+for arg in "$@"; do
+    if [ "$arg" = "--origem" ]; then
+        ORIGEM_PASSED=true
+        break
+    fi
+done
+
+EXTRA_ARGS=()
+if [ "$ORIGEM_PASSED" = false ]; then
+    EXTRA_ARGS=(--origem "$ORIGEM")
+fi
+
 echo "=================================================================="
 echo "  Entrada de Áudio : Kafka B2 -> Tópico 'ods.p5.audio_chunk' (P5)"
+echo "  Origem no Kafka  : $ORIGEM"
 echo "  VAD & Wake Word  : Silero VAD + KWS ('Lexie') na CPU"
 echo "  Inferência ASR   : P2 Runtime (TensorRT Whisper) na GPU"
 echo "  Saída / Eventos  : Kafka -> Tópico 'ods.i5.transcript' (A7)"
@@ -40,4 +55,5 @@ exec "$PYTHON_EXEC" src/pipeline.py \
     --publish-kafka \
     --wake-word \
     --wake-words lexie \
+    "${EXTRA_ARGS[@]}" \
     "$@"

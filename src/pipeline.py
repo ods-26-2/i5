@@ -712,8 +712,10 @@ def main():
             payload_interno["confianca_geral"] = float(conf)
         if "confidence" not in payload_interno:
             payload_interno["confidence"] = float(conf)
-        if "origem" not in payload_interno:
-            payload_interno["origem"] = args.origem or "mic_balcao_1"
+        if args.origem:
+            payload_interno["origem"] = args.origem
+        elif "origem" not in payload_interno:
+            payload_interno["origem"] = "mic_balcao_1"
         if "timestamp_inicio" not in payload_interno:
             payload_interno["timestamp_inicio"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
         if "timestamp_fim" not in payload_interno:

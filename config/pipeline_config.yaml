@@ -10,7 +10,7 @@ audio:
 
 # Conexão com o barramento Kafka (Transporte de Eventos B2 - P5)
 kafka:
-  bootstrap_servers: "34.66.235.91:9093" # Endereço do broker (Google Cloud / Local)
+  bootstrap_servers: "172.18.4.56:9093" # Endereço do broker (Google Cloud / Local)
   group_id: "i5-transcritor"             # Identificador exclusivo do consumidor I5
   topic_input: "ods.p5.audio_chunk"      # Tópico de áudio contínuo emitido por P5
   auto_offset_reset: "latest"            # "latest" para tempo real, "earliest" para replay

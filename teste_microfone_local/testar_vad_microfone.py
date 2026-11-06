@@ -40,6 +40,7 @@ from src.pipeline import RealtimeSpeechPipeline
 def mic_audio_stream(
     target_sample_rate: int = 16000,
     chunk_size_samples: int = 1600,  # 100ms a 16kHz (mesmo chunk_size padrão do pipeline.py)
+    device: Optional[str] = None,
 ) -> Generator[np.ndarray, None, None]:
     """
     Substitui o `simulate_audio_stream` / `KafkaAudioConsumer` (P5) lendo
@@ -57,6 +58,8 @@ def mic_audio_stream(
             "--channels=1",
             "--latency-msec=50",
         ]
+        if device:
+            cmd.append(f"--device={device}")
         fonte = "parecord (PipeWire/PulseAudio)"
     elif shutil.which("arecord"):
         cmd = [
@@ -67,6 +70,8 @@ def mic_audio_stream(
             "-c", "1",
             "-r", str(target_sample_rate),
         ]
+        if device:
+            cmd.extend(["-D", device])
         fonte = "arecord (ALSA)"
     else:
         raise RuntimeError("Nenhum utilitário de captura ('parecord' ou 'arecord') encontrado.")
@@ -114,6 +119,12 @@ def main():
         type=str,
         default="mic_balcao_1",
         help="Identificador da origem/microfone no payload (default: mic_balcao_1)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default=None,
+        help="Dispositivo de entrada de hardware do microfone (ALSA/PulseAudio/PipeWire)",
     )
     parser.add_argument(
         "--publish-kafka",
@@ -214,6 +225,7 @@ def main():
     stream = mic_audio_stream(
         target_sample_rate=sample_rate,
         chunk_size_samples=chunk_size,
+        device=args.device,
     )
 
     start_total = time.perf_counter()

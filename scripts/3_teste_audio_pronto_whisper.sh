@@ -70,8 +70,23 @@ if [ ! -f "$AUDIO_FILE" ]; then
     exit 1
 fi
 
+ORIGEM="${ORIGEM:-mic_balcao_1}"
+ORIGEM_PASSED=false
+for arg in "$@"; do
+    if [ "$arg" = "--origem" ]; then
+        ORIGEM_PASSED=true
+        break
+    fi
+done
+
+EXTRA_ARGS=()
+if [ "$ORIGEM_PASSED" = false ]; then
+    EXTRA_ARGS=(--origem "$ORIGEM")
+fi
+
 echo "------------------------------------------------------------------"
 echo "Processando áudio: $AUDIO_FILE"
+echo "Origem no Kafka  : $ORIGEM"
 echo "Publicando resultado em ods.i5.transcript..."
 echo "------------------------------------------------------------------"
 
@@ -82,4 +97,5 @@ fi
 
 exec "$PYTHON_EXEC" src/pipeline.py "$AUDIO_FILE" \
     --publish-kafka \
+    "${EXTRA_ARGS[@]}" \
     "$@"

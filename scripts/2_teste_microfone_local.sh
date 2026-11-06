@@ -32,6 +32,21 @@ echo "=================================================================="
 echo "  Entrada de Áudio : Microfone Local (16kHz Mono)"
 echo "  Pipeline Oficial : Preprocessador + VAD + Wake Word + Whisper P2"
 echo "  Saída / Eventos  : Publicação Kafka (ods.i5.transcript) e JSON"
+ORIGEM="${ORIGEM:-mic_balcao_1}"
+ORIGEM_PASSED=false
+for arg in "$@"; do
+    if [ "$arg" = "--origem" ]; then
+        ORIGEM_PASSED=true
+        break
+    fi
+done
+
+EXTRA_ARGS=()
+if [ "$ORIGEM_PASSED" = false ]; then
+    EXTRA_ARGS=(--origem "$ORIGEM")
+fi
+
+echo "  Origem no Kafka  : $ORIGEM"
 echo "  Python Utilizado : $PYTHON_EXEC"
 echo "------------------------------------------------------------------"
 echo "  Dica: Fale 'Lexie, quero um X-Salada' para disparar o pedido."
@@ -42,4 +57,5 @@ exec "$PYTHON_EXEC" teste_microfone_local/testar_vad_microfone.py \
     --wake-word \
     --wake-words lexie \
     --publish-kafka \
+    "${EXTRA_ARGS[@]}" \
     "$@"

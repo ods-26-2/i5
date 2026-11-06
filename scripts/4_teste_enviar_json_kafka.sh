@@ -65,8 +65,9 @@ if [ -z "$JSON_ARG" ]; then
 
     if [ "$ESCOLHA" = "T" ] || [ "$ESCOLHA" = "t" ]; then
         read -r -p "Digite a frase do pedido (ex: Quero dois x-saladas e um suco): " FRASE
-        read -r -p "Mesa / Origem [padrão: mic_balcao_1]: " ORIGEM
-        ORIGEM="${ORIGEM:-mic_balcao_1}"
+        DEFAULT_ORIGEM="${ORIGEM:-mic_balcao_1}"
+        read -r -p "Mesa / Microfone de Origem [padrão: $DEFAULT_ORIGEM]: " INPUT_ORIGEM
+        ORIGEM="${INPUT_ORIGEM:-$DEFAULT_ORIGEM}"
 
         TMP_JSON="/tmp/evento_teste_$(date +%s).json"
         cat <<EOF > "$TMP_JSON"
@@ -104,6 +105,12 @@ if [ $# -gt 0 ]; then
     shift
 fi
 
+ORIGEM_FLAG=()
+if [ -n "$ORIGEM" ]; then
+    ORIGEM_FLAG=(--origem "$ORIGEM")
+fi
+
 exec "$PYTHON_EXEC" src/pipeline.py \
     --replay-json "$JSON_ARG" \
+    "${ORIGEM_FLAG[@]}" \
     "$@"
