@@ -33,10 +33,10 @@ PROJECT_ROOT = CURRENT_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Garante prioridade para os pacotes nativos Python 3.12 (NumPy, Confluent Kafka)
+# Fallback secundário para pacotes compartilhados (ex: confluent-kafka se não estiver no venv local)
 _A7_SITE = PROJECT_ROOT.parent / "a7" / ".venv" / "lib" / "python3.12" / "site-packages"
 if _A7_SITE.exists() and str(_A7_SITE) not in sys.path:
-    sys.path.insert(0, str(_A7_SITE))
+    sys.path.append(str(_A7_SITE))
 
 try:
     import librosa

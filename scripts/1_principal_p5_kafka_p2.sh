@@ -19,6 +19,10 @@ cd "$I5_DIR"
 
 if [ -f "$I5_DIR/.venv/bin/python3" ]; then
     PYTHON_EXEC="$I5_DIR/.venv/bin/python3"
+elif [ -f "$I5_DIR/venv/bin/python3" ]; then
+    PYTHON_EXEC="$I5_DIR/venv/bin/python3"
+elif [ -f "$I5_DIR/venv/bin/python" ]; then
+    PYTHON_EXEC="$I5_DIR/venv/bin/python"
 else
     PYTHON_EXEC="python3"
 fi
