@@ -1,0 +1,64 @@
+version: "3.8"
+
+services:
+  # ============================================================================
+  # Serviço Padrão: PC x86_64 / Servidores Linux com GPU NVIDIA ou CPU
+  # ============================================================================
+  ods-i5:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ods-i5:latest
+    container_name: ods-i5-transcription
+    restart: unless-stopped
+    network_mode: "host"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=34.66.235.91:9093
+      - KAFKA_TOPIC=ods.i5.transcript
+      - ORIGEM=mic_balcao_1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Persistência de arquivos fora do container
+      - ./jsons_gerados:/app/jsons_gerados
+      - ./config:/app/config
+      - ./data:/app/data
+      # Socket de áudio PulseAudio do host (para captura do microfone)
+      - /run/user/1000/pulse:/run/user/1000/pulse:ro
+    devices:
+      # Acesso aos dispositivos de áudio físicos ALSA
+      - /dev/snd:/dev/snd
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # ============================================================================
+  # Perfil Jetson: Otimizado para NVIDIA Jetson (Orin Nano / Nano ARM64 / Tegra)
+  # Executar com: docker compose --profile jetson up ods-i5-jetson
+  # ============================================================================
+  ods-i5-jetson:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    image: ods-i5-jetson:latest
+    container_name: ods-i5-jetson
+    restart: unless-stopped
+    network_mode: "host"
+    runtime: nvidia
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=34.66.235.91:9093
+      - KAFKA_TOPIC=ods.i5.transcript
+      - ORIGEM=mic_balcao_1
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./jsons_gerados:/app/jsons_gerados
+      - ./config:/app/config
+      - ./data:/app/data
+      - /run/user/1000/pulse:/run/user/1000/pulse:ro
+    devices:
+      - /dev/snd:/dev/snd
+    profiles:
+      - jetson

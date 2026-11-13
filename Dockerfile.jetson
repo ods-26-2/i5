@@ -1,0 +1,40 @@
+# ==============================================================================
+# Dockerfile.jetson: Componente I5 Otimizado para NVIDIA Jetson (Orin / Nano)
+# Arquitetura: ARM64 (aarch64) com JetPack 5.x / 6.x (L4T) e TensorRT Nativo
+# ==============================================================================
+
+# Imagem base oficial NVIDIA JetPack com PyTorch e CUDA pré-compilados para Tegra
+FROM nvcr.io/nvidia/l4t-pytorch:r35.2.1-pth2.0-py3
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+# 1. Dependências do sistema: ALSA, PulseAudio, compilação, ffmpeg e librdkafka ARM64
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    librdkafka-dev \
+    alsa-utils \
+    pulseaudio-utils \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 2. Instalação das dependências Python
+# Observação: Removemos torch do requirements.txt pois a imagem L4T já traz o PyTorch acelerado para Jetson
+COPY requirements.txt .
+RUN grep -v "^torch" requirements.txt > /tmp/reqs_jetson.txt && \
+    pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir -r /tmp/reqs_jetson.txt
+
+# 3. Cópia do código-fonte e scripts
+COPY . .
+
+# 4. Permissões de execução
+RUN chmod +x run.sh scripts/*.sh
+
+# Ponto de entrada padrão
+ENTRYPOINT ["./run.sh"]
+CMD ["1"]
