@@ -1,0 +1,91 @@
+test_1_kafka_config_loading (test_kafka_consumer.TestKafkaAudioConsumerAcceptance.test_1_kafka_config_loading) ... ok
+test_2_validar_envelope_valido (test_kafka_consumer.TestKafkaAudioConsumerAcceptance.test_2_validar_envelope_valido) ... ok
+test_3_validar_envelope_campos_ausentes (test_kafka_consumer.TestKafkaAudioConsumerAcceptance.test_3_validar_envelope_campos_ausentes) ... ok
+test_4_validar_envelope_schema_invalido (test_kafka_consumer.TestKafkaAudioConsumerAcceptance.test_4_validar_envelope_schema_invalido) ... ok
+test_5_decodificar_audio_base64_int16 (test_kafka_consumer.TestKafkaAudioConsumerAcceptance.test_5_decodificar_audio_base64_int16) ... ok
+test_6_propagacao_captured_at_para_start_at (test_kafka_consumer.TestKafkaAudioConsumerAcceptance.test_6_propagacao_captured_at_para_start_at) ... /home/mateus/Documentos/UFSJ/ODS/i5/.venv/lib/python3.12/site-packages/silero_vad/model.py:29: DeprecationWarning: path is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
+  with impresources.path(package_path, model_name) as f:
+ok
+test_criterio_1_broker_configuravel_por_variavel_ambiente (test_kafka_publication.TestKafkaPublicationAcceptance.test_criterio_1_broker_configuravel_por_variavel_ambiente)
+Garante que o endereço do broker pode ser trocado sem alterar o código ... ok
+test_criterio_1_produtor_apontado_para_broker_e_topico_ods_i5_transcript (test_kafka_publication.TestKafkaPublicationAcceptance.test_criterio_1_produtor_apontado_para_broker_e_topico_ods_i5_transcript)
+Critério 1: O I5 cria um produtor Kafka apontado para o broker e publica ... ok
+test_criterio_2_serializacao_json_utf8_e_envelope_padrao (test_kafka_publication.TestKafkaPublicationAcceptance.test_criterio_2_serializacao_json_utf8_e_envelope_padrao)
+Critério 2: A mensagem é serializada como um JSON válido UTF-8 contendo ... ok
+test_criterio_3_flag_booleana_uncertain_por_confianca_ou_ruido (test_kafka_publication.TestKafkaPublicationAcceptance.test_criterio_3_flag_booleana_uncertain_por_confianca_ou_ruido)
+Critério 3: O payload inclui obrigatoriamente a flag booleana ... ok
+test_validacao_envelope_rejeita_mensagens_fora_do_contrato (test_kafka_publication.TestKafkaPublicationAcceptance.test_validacao_envelope_rejeita_mensagens_fora_do_contrato)
+Verifica a validação em 3 níveis da Seção 4.3 do Guia do Kafka. ... ok
+test_criterio_1_despacha_apenas_com_termo_de_ativacao_ou_modo_continuo_por_flag (test_keyword_spotting.TestKeywordSpottingAcceptance.test_criterio_1_despacha_apenas_com_termo_de_ativacao_ou_modo_continuo_por_flag)
+Critério 1: O pipeline só despacha o lote de áudio para a GPU se o termo ... ok
+test_criterio_2_reducao_comprovada_de_chamadas_ao_whisper_com_conversas_de_fundo (test_keyword_spotting.TestKeywordSpottingAcceptance.test_criterio_2_reducao_comprovada_de_chamadas_ao_whisper_com_conversas_de_fundo)
+Critério 2: Redução comprovada de chamadas desnecessárias ao Whisper na ... ok
+test_deteccao_exclusiva_termo_lexie_na_cpu (test_keyword_spotting.TestKeywordSpottingAcceptance.test_deteccao_exclusiva_termo_lexie_na_cpu)
+Verifica que apenas o termo "Lexie" (e variações fonéticas diretas "lexi"/"lxi") ... ok
+test_contrato_p2_runtime_orcamento_memoria_e_codigos_de_erro (test_p2_integration.TestP2GPUAccelerationAcceptance.test_contrato_p2_runtime_orcamento_memoria_e_codigos_de_erro)
+Valida a especificação da tabela P2 (SIS-1): ... ok
+test_criterio_1_sem_instanciacao_direta_pytorch_e_ciclo_fechado_p2 (test_p2_integration.TestP2GPUAccelerationAcceptance.test_criterio_1_sem_instanciacao_direta_pytorch_e_ciclo_fechado_p2)
+Critério 1: A instanciação direta do PyTorch é substituída por chamadas ... ok
+test_criterio_2_info_handle_preenche_artifact_version_no_envelope_json (test_p2_integration.TestP2GPUAccelerationAcceptance.test_criterio_2_info_handle_preenche_artifact_version_no_envelope_json)
+Critério 2: A função `info(handle)` é chamada para recuperar a versão exata ... ok
+test_criterio_4_whisper_bridge_oficial_p2 (test_p2_integration.TestP2GPUAccelerationAcceptance.test_criterio_4_whisper_bridge_oficial_p2)
+Valida que a classe WhisperBridge fornecida oficialmente pela equipe P2 ... ok
+test_acceptance_criteria_one_minute_silence_five_seconds_speech (test_vad_acceptance.TestVADAcceptanceCriteria.test_acceptance_criteria_one_minute_silence_five_seconds_speech)
+Critério de Aceitação: ... /home/mateus/Documentos/UFSJ/ODS/i5/.venv/lib/python3.12/site-packages/silero_vad/model.py:29: DeprecationWarning: path is deprecated. Use files() instead. Refer to https://importlib-resources.readthedocs.io/en/latest/using.html#migrating-from-legacy for migration advice.
+  with impresources.path(package_path, model_name) as f:
+ok
+test_low_frequency_hum_filtered_out (test_vad_acceptance.TestVADAcceptanceCriteria.test_low_frequency_hum_filtered_out)
+Garante que ruído de rede elétrica (mains hum 60Hz) seja atenuado pelo filtro passa-banda ... ok
+test_pure_silence_yields_zero_batches (test_vad_acceptance.TestVADAcceptanceCriteria.test_pure_silence_yields_zero_batches)
+Garante que 60 segundos de silêncio absoluto não acionem nenhuma inferência na GPU. ... ok
+test_short_transient_click_discarded (test_vad_acceptance.TestVADAcceptanceCriteria.test_short_transient_click_discarded)
+Garante que estalos rápidos (< 100ms) sejam descartados pelo filtro de duração mínima, ... ok
+
+----------------------------------------------------------------------
+Ran 22 tests in 3.298s
+
+OK
+[I5 - Pipeline] Configuração carregada de: /home/mateus/Documentos/UFSJ/ODS/i5/config/pipeline_config.yaml
+[I5 - Pipeline] Runtime de inferência P2 (device alvo: cuda)
+[I5 - Pipeline] Whisper iniciado no device: cuda (modelo: openai/whisper-small)
+[I5 - KWS (CPU)] Lote #0 (0.00s -> 2.00s) DESCARTADO (wake word ['lexie'] não detectada no início: background_low_energy) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #1 (3.00s -> 5.00s) APROVADO (wake word 'lexie' detectada, conf=1.00) -> enviando à GPU
+[I5 - KWS (CPU)] Lote #2 (6.00s -> 8.00s) DESCARTADO (wake word ['lexie'] não detectada no início: background_low_energy) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #3 (9.00s -> 11.00s) APROVADO (wake word 'lexie' detectada, conf=1.00) -> enviando à GPU
+[  3.00s ->   5.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_419579.json]
+[  9.00s ->  11.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_420151.json]
+[I5 - Pipeline] Configuração carregada de: /home/mateus/Documentos/UFSJ/ODS/i5/config/pipeline_config.yaml
+[I5 - Pipeline] Runtime de inferência P2 (device alvo: cuda)
+[I5 - Pipeline] Whisper iniciado no device: cuda (modelo: openai/whisper-small)
+[  0.00s ->   2.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_422780.json]
+[  3.00s ->   5.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_423132.json]
+[  6.00s ->   8.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_423420.json]
+[  9.00s ->  11.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_423616.json]
+[I5 - Pipeline] Configuração carregada de: /home/mateus/Documentos/UFSJ/ODS/i5/config/pipeline_config.yaml
+[I5 - Pipeline] Runtime de inferência P2 (device alvo: cuda)
+[I5 - Pipeline] Whisper iniciado no device: cuda (modelo: openai/whisper-small)
+[  0.00s ->   2.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_446077.json]
+[  2.50s ->   4.50s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_446509.json]
+[  5.00s ->   7.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_446964.json]
+[  7.50s ->   9.50s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_447203.json]
+[ 10.00s ->  12.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_447400.json]
+[ 12.50s ->  14.50s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_447587.json]
+[ 15.00s ->  17.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_447769.json]
+[ 17.50s ->  19.50s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_447958.json]
+[ 20.00s ->  22.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_448249.json]
+[ 22.50s ->  24.50s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_448389.json]
+[I5 - Pipeline] Configuração carregada de: /home/mateus/Documentos/UFSJ/ODS/i5/config/pipeline_config.yaml
+[I5 - Pipeline] Runtime de inferência P2 (device alvo: cuda)
+[I5 - Pipeline] Whisper iniciado no device: cuda (modelo: openai/whisper-small)
+[I5 - KWS (CPU)] Lote #0 (0.00s -> 2.00s) DESCARTADO (wake word ['lexie'] não detectada no início: rejected_prefix_text_mismatch) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #1 (2.50s -> 4.50s) DESCARTADO (wake word ['lexie'] não detectada no início: rejected_prefix_text_mismatch) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #2 (5.00s -> 7.00s) APROVADO (wake word 'lexie' detectada, conf=0.95) -> enviando à GPU
+[I5 - KWS (CPU)] Lote #3 (7.50s -> 9.50s) DESCARTADO (wake word ['lexie'] não detectada no início: rejected_prefix_text_mismatch) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #4 (10.00s -> 12.00s) DESCARTADO (wake word ['lexie'] não detectada no início: rejected_prefix_text_mismatch) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #5 (12.50s -> 14.50s) DESCARTADO (wake word ['lexie'] não detectada no início: background_low_energy) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #6 (15.00s -> 17.00s) DESCARTADO (wake word ['lexie'] não detectada no início: background_low_energy) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #7 (17.50s -> 19.50s) APROVADO (wake word 'lexie' detectada, conf=0.95) -> enviando à GPU
+[I5 - KWS (CPU)] Lote #8 (20.00s -> 22.00s) DESCARTADO (wake word ['lexie'] não detectada no início: background_low_energy) — chamada ao Whisper na GPU economizada!
+[I5 - KWS (CPU)] Lote #9 (22.50s -> 24.50s) DESCARTADO (wake word ['lexie'] não detectada no início: background_low_energy) — chamada ao Whisper na GPU economizada!
+[  5.00s ->   7.00s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_456112.json]
+[ 17.50s ->  19.50s] (conf: 0.92 | uncertain: False | 0ms) => "Lexie quero um X-Bacon" [Salvo em jsons_gerados/evento_i5_20261113_213053_456467.json]

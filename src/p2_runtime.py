@@ -35,6 +35,10 @@ class P2RuntimeError(Exception):
         self.message = message
 
 
+# Tipos compatíveis com as anotações p2.Handle e p2.EngineInfo
+Handle = str
+EngineInfo = Dict[str, Any]
+
 # Códigos de erro oficiais definidos pela especificação P2 (SIS-1)
 ENGINE_NOT_FOUND = "ENGINE_NOT_FOUND"
 INCOMPATIBLE_VERSION = "INCOMPATIBLE_VERSION"

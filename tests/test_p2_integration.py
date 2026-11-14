@@ -241,7 +241,10 @@ class TestP2GPUAccelerationAcceptance(unittest.TestCase):
         (examples/whisper_example.py) implementa a interface fechada P2 (load, infer,
         info, release) e se integra perfeitamente com TranscritorWhisper.
         """
-        from src.whisper_example import WhisperBridge
+        try:
+            from src.whisper_example import WhisperBridge
+        except ModuleNotFoundError:
+            from whisper_example import WhisperBridge
 
         # 1. Verifica os métodos obrigatórios do contrato P2
         self.assertTrue(callable(getattr(WhisperBridge, "load", None)))

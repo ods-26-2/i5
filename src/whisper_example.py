@@ -10,7 +10,13 @@ from typing import Final, TypedDict
 
 import numpy as np
 
-import p2
+try:
+    import p2
+except ImportError:
+    try:
+        from src import p2_runtime as p2
+    except ImportError:
+        import p2_runtime as p2
 try:
     from whisper_demo import (
         CHUNK_SAMPLES,

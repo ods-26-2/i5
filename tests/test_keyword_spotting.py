@@ -80,6 +80,7 @@ class SpyWhisperTranscritor:
                     "origem": origem,
                     "texto_transcrito": "Lexie quero um X-Bacon",
                     "confianca": 0.92,
+                    "confianca_geral": 0.92,
                     "uncertain": False,
                 },
             }

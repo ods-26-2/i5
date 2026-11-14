@@ -145,3 +145,29 @@ def test_propagacao_captured_at_para_start_at():
     assert first_batch.start_at is not None
     assert "2026-10-21T15:30:0" in first_batch.start_at
     assert first_batch.end_at is not None
+
+
+import unittest
+
+
+class TestKafkaAudioConsumerAcceptance(unittest.TestCase):
+    """Wrapper unittest para execução unificada da suíte do consumidor Kafka (ods.p5.audio_chunk)."""
+
+    def test_1_kafka_config_loading(self):
+        test_kafka_config_loading()
+
+    def test_2_validar_envelope_valido(self):
+        test_validar_envelope_valido()
+
+    def test_3_validar_envelope_campos_ausentes(self):
+        test_validar_envelope_campos_ausentes()
+
+    def test_4_validar_envelope_schema_invalido(self):
+        test_validar_envelope_schema_invalido()
+
+    def test_5_decodificar_audio_base64_int16(self):
+        test_decodificar_audio_base64_int16()
+
+    def test_6_propagacao_captured_at_para_start_at(self):
+        test_propagacao_captured_at_para_start_at()
+
